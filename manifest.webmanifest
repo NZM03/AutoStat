@@ -1,0 +1,12 @@
+{
+  "name": "AutoStat AI Agent",
+  "short_name": "AutoStat",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#764ba2",
+  "icons": [
+    { "src": "./icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
