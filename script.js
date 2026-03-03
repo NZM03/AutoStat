@@ -29,6 +29,40 @@ function fmt(n, digits = 4) {
 function clamp(x, lo, hi) {
   return Math.max(lo, Math.min(hi, x));
 }
+function writeMath(id, text) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text;
+}
+
+function safeSum(arr) {
+  let s = 0;
+  for (const v of arr) s += v;
+  return s;
+}
+
+function safeSumSq(arr) {
+  let s = 0;
+  for (const v of arr) s += v * v;
+  return s;
+}
+
+function safeSumXY(X, y) {
+  let s = 0;
+  for (let i = 0; i < X.length; i++) s += X[i] * y[i];
+  return s;
+}
+
+function logLoss(probs, y) {
+  // binary cross-entropy
+  let total = 0;
+  const eps = 1e-12;
+  for (let i = 0; i < probs.length; i++) {
+    const p = Math.min(1 - eps, Math.max(eps, probs[i]));
+    total += -(y[i] * Math.log(p) + (1 - y[i]) * Math.log(1 - p));
+  }
+  return total / probs.length;
+}
 
 class StatisticalAgent {
   constructor() {
