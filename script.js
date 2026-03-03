@@ -1,4 +1,4 @@
-// AutoStat AI Agent - Statistical Analysis Engine (upload-safe + live streaming math)
+// AutoStat AI Agent - Statistical Analysis Engine (Auto Mode re-enabled)
 
 const AUTOSTAT_CONFIG = {
   maxResultsCards: 10,
@@ -12,7 +12,7 @@ const AUTOSTAT_CONFIG = {
     binarizeMethod: "median",
     standardizeX: true,
     maxPredictorsPerRun: 6,
-    uiUpdateEvery: 50, // iterations
+    uiUpdateEvery: 50, // iterations between UI updates // guardrail for stability/speed
   },
 
   autoMode: {
@@ -30,33 +30,42 @@ function fmt(n, digits = 4) {
 function clamp(x, lo, hi) {
   return Math.max(lo, Math.min(hi, x));
 }
-
 function writeMath(id, text) {
   const el = document.getElementById(id);
   if (!el) return;
   el.textContent = text;
 }
+
 function appendMath(id, text) {
   const el = document.getElementById(id);
   if (!el) return;
   el.textContent += text;
 }
+
+function rafYield() {
+  return new Promise(requestAnimationFrame);
+}
+
 function safeSum(arr) {
   let s = 0;
   for (const v of arr) s += v;
   return s;
 }
+
 function safeSumSq(arr) {
   let s = 0;
   for (const v of arr) s += v * v;
   return s;
 }
+
 function safeSumXY(X, y) {
   let s = 0;
   for (let i = 0; i < X.length; i++) s += X[i] * y[i];
   return s;
 }
+
 function logLoss(probs, y) {
+  // binary cross-entropy
   let total = 0;
   const eps = 1e-12;
   for (let i = 0; i < probs.length; i++) {
@@ -64,9 +73,6 @@ function logLoss(probs, y) {
     total += -(y[i] * Math.log(p) + (1 - y[i]) * Math.log(1 - p));
   }
   return total / probs.length;
-}
-function rafYield() {
-  return new Promise(requestAnimationFrame);
 }
 
 class StatisticalAgent {
@@ -100,7 +106,7 @@ class StatisticalAgent {
 
     this.initCharts();
     this.generateVariableNames();
-    this.initFileUpload();   // IMPORTANT: keeps your working upload behavior
+    this.initFileUpload();
     this.initModeUI();
   }
 
@@ -124,21 +130,15 @@ class StatisticalAgent {
     apply();
   }
 
-  /* =========================
-     Upload (WORKING VERSION)
-     ========================= */
+  /* ---------- Upload (reverted simple + reliable) ---------- */
   initFileUpload() {
     const fileInput = document.getElementById("excel-file");
     const uploadArea = document.getElementById("upload-area");
 
-    // Click to upload
     uploadArea.addEventListener("click", (e) => {
-      if (e.target !== fileInput) {
-        fileInput.click();
-      }
+      if (e.target !== fileInput) fileInput.click();
     });
 
-    // Drag and drop
     uploadArea.addEventListener("dragover", (e) => {
       e.preventDefault();
       uploadArea.classList.add("border-purple-500", "bg-purple-50");
@@ -152,19 +152,12 @@ class StatisticalAgent {
       e.preventDefault();
       uploadArea.classList.remove("border-purple-500", "bg-purple-50");
       const files = e.dataTransfer.files;
-      if (files.length > 0) {
-        this.handleFile(files[0]);
-      }
-      // allow re-selecting same file later
+      if (files.length > 0) this.handleFile(files[0]);
       fileInput.value = "";
     });
 
-    // File selection
     fileInput.addEventListener("change", (e) => {
-      if (e.target.files.length > 0) {
-        this.handleFile(e.target.files[0]);
-      }
-      // allow re-selecting same file later
+      if (e.target.files.length > 0) this.handleFile(e.target.files[0]);
       fileInput.value = "";
     });
   }
@@ -305,9 +298,7 @@ class StatisticalAgent {
     previewContainer.classList.remove("hidden");
   }
 
-  /* =========================
-     Data generation / selection
-     ========================= */
+  /* ---------- Data generation ---------- */
   generateVariableNames() {
     const prefixes = ["Revenue","Traffic","Conversion","Engagement","Retention","Satisfaction","Churn","Growth","Efficiency","Quality","Speed","Cost","Profit","Risk","Score"];
     const suffixes = ["Rate","Index","Level","Count","Ratio","Value","Metric"];
@@ -376,9 +367,20 @@ class StatisticalAgent {
     return { data, predictors: effectivePredictors, targetVar: targetVar || effectivePredictors[effectivePredictors.length - 1], isUploaded: true };
   }
 
-  /* =========================
-     Modeling helpers
-     ========================= */
+  /* ---------- Modeling helpers ---------- */
+  computeR2(y, yhat) {
+    if (!y.length || y.length !== yhat.length) return 0;
+    if (yhat.some((v) => !Number.isFinite(v))) return 0;
+
+    const n = y.length;
+    const mean = y.reduce((a, b) => a + b, 0) / n;
+    const ssT = y.reduce((s, yi) => s + (yi - mean) ** 2, 0);
+    const ssR = y.reduce((s, yi, i) => s + (yi - yhat[i]) ** 2, 0);
+    if (!Number.isFinite(ssT) || ssT === 0) return 0;
+    const r2 = 1 - ssR / ssT;
+    return Number.isFinite(r2) ? r2 : 0;
+  }
+
   buildMatrixAndVector(data, predictors, target) {
     const X = [];
     const y = [];
@@ -441,10 +443,44 @@ class StatisticalAgent {
     return yRaw.map((v) => (v > median ? 1 : 0));
   }
 
-  /* =========================
-     LIVE Linear Regression
-     ========================= */
-  async linearRegressionLive(X, y) {
+  linearRegression(X, y) {
+    const n = X.length;
+    const sumX = X.reduce((a, b) => a + b, 0);
+    const sumY = y.reduce((a, b) => a + b, 0);
+    const sumXY = X.reduce((total, xi, i) => total + xi * y[i], 0);
+    const sumX2 = X.reduce((total, xi) => total + xi * xi, 0);
+
+    const denom = (n * sumX2 - sumX * sumX);
+    const slope = denom === 0 ? 0 : (n * sumXY - sumX * sumY) / denom;
+    const intercept = (sumY - slope * sumX) / n;
+
+    const preds = X.map((xi) => slope * xi + intercept);
+    const r2 = this.computeR2(y, preds);
+    return { slope, intercept, r2, predictions: preds };
+  }
+
+  logisticRegression(X, y, iterations = AUTOSTAT_CONFIG.logistic.iterations, learningRate = AUTOSTAT_CONFIG.logistic.learningRate) {
+    const p = X[0].length;
+    let weights = Array(p).fill(0);
+    let bias = 0;
+
+    const sigmoid = (z) => 1 / (1 + Math.exp(-clamp(z, -35, 35)));
+
+    for (let iter = 0; iter < iterations; iter++) {
+      let dw = Array(p).fill(0);
+      let db = 0;
+
+      for (let i = 0; i < X.length; i++) {
+        const z = X[i].reduce((sum, xij, j) => sum + xij * weights[j], 0) + bias;
+        const pred = sigmoid(z);
+        const error = pred - y[i];
+
+        for (let j = 0; j < p; j++) dw[j] += error * X[i][j];
+        db += error;
+      }
+
+
+async linearRegressionLive(X, y) {
     const n = X.length;
 
     writeMath("math-linear", "Starting linear regression...\n");
@@ -483,13 +519,15 @@ class StatisticalAgent {
     const yMean = sumY / n;
     let ssTotal = 0;
     let ssResidual = 0;
+
     for (let i = 0; i < n; i++) {
       const d = y[i] - yMean;
       ssTotal += d * d;
       const r = y[i] - preds[i];
       ssResidual += r * r;
-      // yield every ~200 rows so UI stays alive on big samples
-      if (i % 200 === 0) await rafYield();
+
+      if (i % 250 === 0) await rafYield();
+      if (!this.isRunning) break;
     }
 
     const r2 = (ssTotal === 0) ? 0 : (1 - ssResidual / ssTotal);
@@ -501,13 +539,11 @@ class StatisticalAgent {
     return { slope, intercept, r2, predictions: preds };
   }
 
-  /* =========================
-     LIVE Logistic Regression
-     ========================= */
-  async logisticRegressionLive(X, y, iterations = AUTOSTAT_CONFIG.logistic.iterations, learningRate = AUTOSTAT_CONFIG.logistic.learningRate) {
+async logisticRegressionLive(X, y, iterations = AUTOSTAT_CONFIG.logistic.iterations, learningRate = AUTOSTAT_CONFIG.logistic.learningRate) {
     const p = X[0].length;
     let weights = Array(p).fill(0);
     let bias = 0;
+
     const sigmoid = (z) => 1 / (1 + Math.exp(-clamp(z, -35, 35)));
 
     writeMath("math-logistic",
@@ -520,11 +556,11 @@ iterations = ${iterations}
 learningRate = ${learningRate}
 p = ${p}
 
-Starting...
+Progress:
 `);
     await rafYield();
 
-    const chunk = AUTOSTAT_CONFIG.logistic.uiUpdateEvery;
+    const chunk = AUTOSTAT_CONFIG.logistic.uiUpdateEvery || 50;
 
     for (let iter = 1; iter <= iterations; iter++) {
       if (!this.isRunning) break;
@@ -540,7 +576,8 @@ Starting...
         for (let j = 0; j < p; j++) dw[j] += error * X[i][j];
         db += error;
 
-        if (i % 400 === 0) await rafYield();
+        if (i % 500 === 0) await rafYield();
+        if (!this.isRunning) break;
       }
 
       for (let j = 0; j < p; j++) weights[j] -= (learningRate / X.length) * dw[j];
@@ -550,7 +587,8 @@ Starting...
         const probs = X.map((xi) => sigmoid(xi.reduce((s, xij, j) => s + xij * weights[j], 0) + bias));
         const loss = logLoss(probs, y);
 
-        const showW = weights.slice(0, Math.min(6, weights.length)).map((v) => (Number.isFinite(v) ? v.toFixed(6) : "NaN"));
+        const showW = weights.slice(0, Math.min(6, weights.length))
+          .map((v) => (Number.isFinite(v) ? v.toFixed(6) : "NaN"));
         const wTail = weights.length > 6 ? ", ..." : "";
 
         appendMath("math-logistic",
@@ -583,9 +621,24 @@ precision = ${precision.toFixed(6)}
     return { weights, bias, accuracy, precision, predictions };
   }
 
-  /* =========================
-     Charts
-     ========================= */
+      for (let j = 0; j < p; j++) weights[j] -= (learningRate / X.length) * dw[j];
+      bias -= (learningRate / X.length) * db;
+    }
+
+    const predictions = X.map((xi) => {
+      const z = xi.reduce((sum, xij, j) => sum + xij * weights[j], 0) + bias;
+      return sigmoid(z) > AUTOSTAT_CONFIG.logistic.threshold ? 1 : 0;
+    });
+
+    const accuracy = predictions.filter((p, i) => p === y[i]).length / y.length;
+    const tp = predictions.filter((p, i) => p === 1 && y[i] === 1).length;
+    const fp = predictions.filter((p, i) => p === 1 && y[i] === 0).length;
+    const precision = tp / (tp + fp) || 0;
+
+    return { weights, bias, accuracy, precision, predictions };
+  }
+
+  /* ---------- Charts ---------- */
   initCharts() {
     const linearOptions = {
       responsive: true,
@@ -616,9 +669,7 @@ precision = ${precision.toFixed(6)}
     });
   }
 
-  /* =========================
-     Auto Mode (unchanged behavior)
-     ========================= */
+  /* ---------- Auto Mode ---------- */
   startAutoMode() {
     const targetSelect = document.getElementById("target-variable");
     const predictorSelect = document.getElementById("predictor-variables");
@@ -663,6 +714,7 @@ precision = ${precision.toFixed(6)}
   generateCombinations(items, k) {
     const result = [];
     const n = items.length;
+
     function backtrack(start, current) {
       if (current.length === k) {
         result.push([...current]);
@@ -691,24 +743,15 @@ precision = ${precision.toFixed(6)}
         const rows = X.map((row, i) => [...row, y[i]]);
         const coefs = ss.multipleLinearRegression(rows);
         const preds = X.map((row) => coefs[0] + row.reduce((s, v, j) => s + v * coefs[j + 1], 0));
-
-        // compute R2
-        const mean = safeSum(y) / y.length;
-        let ssT = 0, ssR = 0;
-        for (let i = 0; i < y.length; i++) {
-          const d = y[i] - mean;
-          ssT += d * d;
-          const r = y[i] - preds[i];
-          ssR += r * r;
-        }
-        const r2 = ssT === 0 ? 0 : 1 - ssR / ssT;
-        return { score: Number.isFinite(r2) ? r2 : 0, label: "R²" };
-      } catch (_) {}
+        const r2 = this.computeR2(y, preds);
+        return { score: r2, label: "R²" };
+      } catch (_) {
+        // fallback below
+      }
     }
 
-    // fallback: composite
     const X1 = X.map((row) => row.reduce((a, b) => a + b, 0) / row.length);
-    const res = this.simpleLinear(X1, y);
+    const res = this.linearRegression(X1, y);
     return { score: res.r2, label: "R²" };
   }
 
@@ -720,8 +763,7 @@ precision = ${precision.toFixed(6)}
     let X = Xraw;
     if (AUTOSTAT_CONFIG.logistic.standardizeX) X = this.standardizeMatrix(Xraw).X;
 
-    // fast non-live logistic for auto mode
-    const res = this.logisticRegressionFast(X, y);
+    const res = this.logisticRegression(X, y);
     return { score: res.accuracy, label: "Accuracy" };
   }
 
@@ -851,9 +893,7 @@ precision = ${precision.toFixed(6)}
     });
   }
 
-  /* =========================
-     Continuous run (single mode)
-     ========================= */
+  /* ---------- Continuous run (single mode) ---------- */
   async runAnalysis() {
     const sampleSize = parseInt(document.getElementById("sample-size").value);
     const analysisType = this.getAnalysisType();
@@ -889,8 +929,6 @@ precision = ${precision.toFixed(6)}
       return;
     }
     const x1 = X.map((row) => row[0]);
-
-    // LIVE math
     const result = await this.linearRegressionLive(x1, y);
 
     this.stats.linear.count++;
@@ -914,7 +952,6 @@ precision = ${precision.toFixed(6)}
     let X = Xraw;
     if (AUTOSTAT_CONFIG.logistic.standardizeX) X = this.standardizeMatrix(Xraw).X;
 
-    // LIVE math
     const result = await this.logisticRegressionLive(X, y);
 
     this.stats.logistic.count++;
@@ -927,74 +964,11 @@ precision = ${precision.toFixed(6)}
     this.addResultCard("logistic", predictors.join(", "), target, result);
   }
 
-  // Used only for auto-mode fallback scoring (fast)
-  simpleLinear(X, y) {
-    const n = X.length;
-    const sumX = safeSum(X);
-    const sumY = safeSum(y);
-    const sumXY = safeSumXY(X, y);
-    const sumX2 = safeSumSq(X);
-
-    const denom = (n * sumX2 - sumX * sumX);
-    const slope = denom === 0 ? 0 : (n * sumXY - sumX * sumY) / denom;
-    const intercept = (sumY - slope * sumX) / n;
-
-    const preds = X.map((xi) => slope * xi + intercept);
-    const mean = sumY / n;
-    let ssT = 0, ssR = 0;
-    for (let i = 0; i < n; i++) {
-      const d = y[i] - mean; ssT += d * d;
-      const r = y[i] - preds[i]; ssR += r * r;
-    }
-    const r2 = ssT === 0 ? 0 : 1 - ssR / ssT;
-    return { slope, intercept, r2 };
-  }
-
-  logisticRegressionFast(X, y, iterations = 250, learningRate = 0.12) {
-    const p = X[0].length;
-    let weights = Array(p).fill(0);
-    let bias = 0;
-    const sigmoid = (z) => 1 / (1 + Math.exp(-clamp(z, -35, 35)));
-
-    for (let iter = 0; iter < iterations; iter++) {
-      let dw = Array(p).fill(0);
-      let db = 0;
-
-      for (let i = 0; i < X.length; i++) {
-        const z = X[i].reduce((sum, xij, j) => sum + xij * weights[j], 0) + bias;
-        const pred = sigmoid(z);
-        const error = pred - y[i];
-
-        for (let j = 0; j < p; j++) dw[j] += error * X[i][j];
-        db += error;
-      }
-
-      for (let j = 0; j < p; j++) weights[j] -= (learningRate / X.length) * dw[j];
-      bias -= (learningRate / X.length) * db;
-    }
-
-    const predictions = X.map((xi) => {
-      const z = xi.reduce((sum, xij, j) => sum + xij * weights[j], 0) + bias;
-      return sigmoid(z) > AUTOSTAT_CONFIG.logistic.threshold ? 1 : 0;
-    });
-
-    const accuracy = predictions.filter((pHat, i) => pHat === y[i]).length / y.length;
-    const tp = predictions.filter((pHat, i) => pHat === 1 && y[i] === 1).length;
-    const fp = predictions.filter((pHat, i) => pHat === 1 && y[i] === 0).length;
-    const precision = tp / (tp + fp) || 0;
-
-    return { accuracy, precision };
-  }
-
-  /* =========================
-     UI helpers
-     ========================= */
+  /* ---------- UI ---------- */
   addResultCard(type, predictor, target, result) {
     const container = document.getElementById("results-container");
     const card = document.createElement("div");
-    card.className =
-      "log-entry p-4 bg-gray-50 rounded-lg border-l-4 " +
-      (type === "linear" ? "border-blue-500" : "border-purple-500");
+    card.className = "log-entry p-4 bg-gray-50 rounded-lg border-l-4 " + (type === "linear" ? "border-blue-500" : "border-purple-500");
 
     const isLinear = type === "linear";
     const title = isLinear ? "Linear Regression" : "Logistic Regression";
@@ -1067,13 +1041,7 @@ precision = ${precision.toFixed(6)}
     const entry = document.createElement("div");
     entry.className = `log-entry p-2 bg-${color}-50 rounded border-l-2 border-${color}-400`;
 
-    const colors = {
-      gray: "text-gray-600",
-      blue: "text-blue-600",
-      purple: "text-purple-600",
-      green: "text-green-600",
-      orange: "text-orange-600",
-    };
+    const colors = { gray: "text-gray-600", blue: "text-blue-600", purple: "text-purple-600", green: "text-green-600", orange: "text-orange-600" };
 
     entry.innerHTML = `
       <span class="text-gray-400 text-xs">[${new Date().toLocaleTimeString()}]</span>
@@ -1090,18 +1058,14 @@ precision = ${precision.toFixed(6)}
     document.getElementById("linear-r2").textContent = fmt(lastR2, 4);
     document.getElementById("linear-best-r2").textContent =
       Number.isFinite(this.stats.linear.bestR2) && this.stats.linear.bestR2 > -Infinity ? this.stats.linear.bestR2.toFixed(4) : "-";
-    const avgSlope = this.stats.linear.slopes.length
-      ? this.stats.linear.slopes.reduce((a, b) => a + b, 0) / this.stats.linear.slopes.length
-      : NaN;
+    const avgSlope = this.stats.linear.slopes.length ? (this.stats.linear.slopes.reduce((a, b) => a + b, 0) / this.stats.linear.slopes.length) : NaN;
     document.getElementById("linear-slope").textContent = fmt(avgSlope, 4);
 
     document.getElementById("logistic-count").textContent = this.stats.logistic.count;
     const lastAcc = this.stats.logistic.accuracies[this.stats.logistic.accuracies.length - 1];
     document.getElementById("logistic-acc").textContent = fmt(lastAcc, 4);
     document.getElementById("logistic-best-acc").textContent = fmt(this.stats.logistic.bestAcc, 4);
-    const avgPrec = this.stats.logistic.precisions.length
-      ? this.stats.logistic.precisions.reduce((a, b) => a + b, 0) / this.stats.logistic.precisions.length
-      : NaN;
+    const avgPrec = this.stats.logistic.precisions.length ? (this.stats.logistic.precisions.reduce((a, b) => a + b, 0) / this.stats.logistic.precisions.length) : NaN;
     document.getElementById("logistic-precision").textContent = fmt(avgPrec, 4);
 
     document.getElementById("total-runs").textContent = this.stats.totalRuns;
@@ -1116,10 +1080,34 @@ precision = ${precision.toFixed(6)}
     this.logisticChart.update("none");
   }
 
-  updateProgressDisplay() {
-    const progress = this.combinations.length > 0 ? (this.currentCombinationIndex / this.combinations.length) * 100 : 0;
-    document.getElementById("progress-text").textContent = `${this.currentCombinationIndex} / ${this.combinations.length} completed`;
-    document.getElementById("progress-bar").style.width = `${progress}%`;
+  initCharts() {
+    const linearOptions = {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { x: { display: false }, y: { suggestedMin: -1, suggestedMax: 1 } },
+      elements: { point: { radius: 0 }, line: { tension: 0.25 } },
+    };
+
+    const logisticOptions = {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { x: { display: false }, y: { beginAtZero: true, suggestedMax: 1 } },
+      elements: { point: { radius: 0 }, line: { tension: 0.25 } },
+    };
+
+    this.linearChart = new Chart(document.getElementById("linear-chart"), {
+      type: "line",
+      data: { labels: [], datasets: [{ data: [], borderColor: "#3b82f6", backgroundColor: "rgba(59, 130, 246, 0.1)", fill: true, borderWidth: 2 }] },
+      options: linearOptions,
+    });
+
+    this.logisticChart = new Chart(document.getElementById("logistic-chart"), {
+      type: "line",
+      data: { labels: [], datasets: [{ data: [], borderColor: "#8b5cf6", backgroundColor: "rgba(139, 92, 246, 0.1)", fill: true, borderWidth: 2 }] },
+      options: logisticOptions,
+    });
   }
 
   start() {
@@ -1171,6 +1159,12 @@ precision = ${precision.toFixed(6)}
     const minutes = Math.floor((elapsed % 3600) / 60).toString().padStart(2, "0");
     const seconds = (elapsed % 60).toString().padStart(2, "0");
     document.getElementById("uptime").textContent = `${hours}:${minutes}:${seconds}`;
+  }
+
+  updateProgressDisplay() {
+    const progress = this.combinations.length > 0 ? (this.currentCombinationIndex / this.combinations.length) * 100 : 0;
+    document.getElementById("progress-text").textContent = `${this.currentCombinationIndex} / ${this.combinations.length} completed`;
+    document.getElementById("progress-bar").style.width = `${progress}%`;
   }
 }
 
