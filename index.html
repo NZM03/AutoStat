@@ -66,7 +66,6 @@
     </div>
   </header>
 
-  <!-- Main Content -->
   <main class="container mx-auto px-4 py-8">
 
     <!-- File Upload Section -->
@@ -78,7 +77,7 @@
 
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
-        <!-- Upload Area -->
+        <!-- Upload Area (reverted to original style) -->
         <div>
           <div id="upload-area" class="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center hover:border-purple-500 transition-colors cursor-pointer bg-gray-50">
             <i data-lucide="file-spreadsheet" class="w-12 h-12 mx-auto mb-3 text-gray-400"></i>
@@ -87,8 +86,8 @@
 
             <input type="file" id="excel-file" accept=".xlsx,.xls" class="hidden">
 
-            <!-- Removed inline onclick to avoid double-trigger -->
-            <button id="choose-file-btn" type="button" class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm">
+            <button onclick="document.getElementById('excel-file').click()"
+                    class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm">
               Choose File
             </button>
           </div>
@@ -225,7 +224,6 @@
 
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-2">Analysis Type</label>
-          <!-- Removed "both": one or the other only -->
           <select id="analysis-type"
                   class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent">
             <option value="linear">Linear Regression (R²)</option>
@@ -334,7 +332,6 @@
 
     <!-- Live Results & Logs -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <!-- Current Analysis Results -->
       <div class="bg-white rounded-2xl shadow-lg p-6">
         <h3 class="font-semibold text-gray-800 mb-4 flex items-center gap-2">
           <i data-lucide="file-bar-chart" class="w-5 h-5 text-indigo-500"></i>
@@ -348,7 +345,6 @@
         </div>
       </div>
 
-      <!-- Activity Log -->
       <div class="bg-white rounded-2xl shadow-lg p-6">
         <h3 class="font-semibold text-gray-800 mb-4 flex items-center gap-2">
           <i data-lucide="scroll-text" class="w-5 h-5 text-orange-500"></i>
@@ -364,91 +360,42 @@
 
   </main>
 
-  <!-- App logic -->
+  <!-- Your chime file (put in repo: sounds/bmw-warning-chime.mp3) -->
+  <audio id="bmw-chime" src="./sounds/bmw-warning-chime.mp3" preload="auto"></audio>
+
   <script src="./script.js"></script>
+  <script>lucide.createIcons();</script>
 
+  <!-- Exact sound playback -->
   <script>
-    lucide.createIcons();
-  </script>
-
-  <!-- Audio Context + BMW-style gong -->
-  <script>
-    window.audioContext = null;
-
-    function initAudio() {
-      if (!window.audioContext) {
-        window.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      }
-      if (window.audioContext.state === "suspended") {
-        window.audioContext.resume().catch(() => {});
-      }
-    }
-
-    // Synthesized 2-tone "gong-ish" chime (closer to BMW iDrive style than the old ping)
+    // Plays your uploaded BMW chime file. No synth. Lower volume by default.
     function playPing() {
-      initAudio();
-      const ctx = window.audioContext;
-      if (!ctx) return;
+      const base = document.getElementById("bmw-chime");
+      if (!base) return;
 
-      const now = ctx.currentTime;
-
-      const master = ctx.createGain();
-      master.gain.setValueAtTime(0.0001, now);
-      master.gain.exponentialRampToValueAtTime(0.18, now + 0.01);
-      master.gain.exponentialRampToValueAtTime(0.0001, now + 1.15);
-      master.connect(ctx.destination);
-
-      // light echo for "gong" feel
-      const delay = ctx.createDelay(1.5);
-      delay.delayTime.setValueAtTime(0.085, now);
-      const fb = ctx.createGain();
-      fb.gain.setValueAtTime(0.22, now);
-      delay.connect(fb);
-      fb.connect(delay);
-      delay.connect(master);
-
-      function chime(t0, fStart, fEnd, dur) {
-        const o1 = ctx.createOscillator();
-        const o2 = ctx.createOscillator();
-        const g = ctx.createGain();
-
-        o1.type = "sine";
-        o2.type = "triangle";
-        o2.detune.value = 7;
-
-        g.gain.setValueAtTime(0.0001, t0);
-        g.gain.exponentialRampToValueAtTime(0.9, t0 + 0.008);
-        g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-
-        // gentle downward glide
-        o1.frequency.setValueAtTime(fStart, t0);
-        o1.frequency.exponentialRampToValueAtTime(fEnd, t0 + dur);
-
-        // metallic-ish harmonic
-        o2.frequency.setValueAtTime(fStart * 2.01, t0);
-        o2.frequency.exponentialRampToValueAtTime(fEnd * 2.01, t0 + dur);
-
-        o1.connect(g);
-        o2.connect(g);
-        g.connect(master);
-        g.connect(delay);
-
-        o1.start(t0);
-        o2.start(t0);
-        o1.stop(t0 + dur + 0.03);
-        o2.stop(t0 + dur + 0.03);
-      }
-
-      // two-tone “ding-dong”
-      chime(now, 784, 659, 0.35);
-      chime(now + 0.20, 659, 523, 0.55);
+      // clone so repeated plays don't get cut off
+      const a = base.cloneNode(true);
+      a.volume = 0.35;
+      a.currentTime = 0;
+      const p = a.play();
+      if (p && p.catch) p.catch(() => {});
     }
+
+    // Unlock audio on first user interaction (browser autoplay policy)
+    window.addEventListener("pointerdown", () => {
+      const a = document.getElementById("bmw-chime");
+      if (!a) return;
+      a.volume = 0.0;
+      const p = a.play();
+      if (p && p.then) {
+        p.then(() => { a.pause(); a.currentTime = 0; a.volume = 0.35; }).catch(() => {});
+      }
+    }, { once: true });
 
     // Auto-mode settings toggle
     document.addEventListener('DOMContentLoaded', function() {
       const autoModeCheckbox = document.getElementById('auto-predictor-mode');
       const autoModeSettings = document.getElementById('auto-mode-settings');
-
       if (autoModeCheckbox && autoModeSettings) {
         autoModeCheckbox.addEventListener('change', function() {
           autoModeSettings.classList.toggle('hidden', !this.checked);
