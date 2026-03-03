@@ -335,6 +335,51 @@
       <div class="bg-white rounded-2xl shadow-lg p-6">
         <h3 class="font-semibold text-gray-800 mb-4 flex items-center gap-2">
           <i data-lucide="file-bar-chart" class="w-5 h-5 text-indigo-500"></i>
+          <!-- Live Math / Calculations -->
+<section class="mt-8 glass-panel rounded-2xl shadow-xl p-6">
+  <div class="flex items-center justify-between gap-4">
+    <h2 class="text-xl font-semibold flex items-center gap-2">
+      <i data-lucide="calculator" class="w-5 h-5 text-purple-600"></i>
+      Live Math / Calculations
+    </h2>
+
+    <button id="toggle-math"
+            class="px-4 py-2 bg-gray-100 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors">
+      Hide
+    </button>
+  </div>
+
+  <p class="text-sm text-gray-600 mt-2">
+    Shows the exact intermediate values used to compute the latest model.
+  </p>
+
+  <div id="math-panel" class="mt-4">
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div class="bg-gray-50 border border-gray-200 rounded-lg p-4">
+        <div class="text-xs font-semibold text-gray-600 mb-2">LINEAR REGRESSION (latest)</div>
+        <pre id="math-linear" class="text-xs font-mono text-gray-800 whitespace-pre-wrap overflow-x-auto leading-relaxed">No linear run yet.</pre>
+      </div>
+
+      <div class="bg-gray-50 border border-gray-200 rounded-lg p-4">
+        <div class="text-xs font-semibold text-gray-600 mb-2">LOGISTIC REGRESSION (latest)</div>
+        <pre id="math-logistic" class="text-xs font-mono text-gray-800 whitespace-pre-wrap overflow-x-auto leading-relaxed">No logistic run yet.</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+  // Toggle live math visibility (does not affect calculations)
+  document.addEventListener("DOMContentLoaded", () => {
+    const btn = document.getElementById("toggle-math");
+    const panel = document.getElementById("math-panel");
+    if (!btn || !panel) return;
+    btn.addEventListener("click", () => {
+      const hidden = panel.classList.toggle("hidden");
+      btn.textContent = hidden ? "Show" : "Hide";
+    });
+  });
+</script>
           Latest Analysis Results
         </h3>
         <div id="results-container" class="space-y-4 max-h-96 overflow-y-auto">
