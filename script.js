@@ -1,4 +1,4 @@
-// AutoStat AI Agent - Statistical Analysis Engine (upload reverted + exact chime)
+// AutoStat AI Agent - Statistical Analysis Engine (Auto Mode re-enabled)
 
 const AUTOSTAT_CONFIG = {
   maxResultsCards: 10,
@@ -11,10 +11,11 @@ const AUTOSTAT_CONFIG = {
     threshold: 0.5,
     binarizeMethod: "median",
     standardizeX: true,
+    maxPredictorsPerRun: 6, // guardrail for stability/speed
   },
 
   autoMode: {
-    useMultipleLinearRegression: true,
+    useMultipleLinearRegression: true, // uses simple-statistics if available
   },
 
   missing: {
@@ -84,17 +85,15 @@ class StatisticalAgent {
     apply();
   }
 
-  /* ---------- Upload (reverted to simple, reliable) ---------- */
+  /* ---------- Upload (reverted simple + reliable) ---------- */
   initFileUpload() {
     const fileInput = document.getElementById("excel-file");
     const uploadArea = document.getElementById("upload-area");
 
-    // Click to upload (ignore clicking the input itself)
     uploadArea.addEventListener("click", (e) => {
       if (e.target !== fileInput) fileInput.click();
     });
 
-    // Drag and drop
     uploadArea.addEventListener("dragover", (e) => {
       e.preventDefault();
       uploadArea.classList.add("border-purple-500", "bg-purple-50");
@@ -109,14 +108,11 @@ class StatisticalAgent {
       uploadArea.classList.remove("border-purple-500", "bg-purple-50");
       const files = e.dataTransfer.files;
       if (files.length > 0) this.handleFile(files[0]);
-      // allow re-selecting same file later
       fileInput.value = "";
     });
 
-    // File selection
     fileInput.addEventListener("change", (e) => {
       if (e.target.files.length > 0) this.handleFile(e.target.files[0]);
-      // allow re-selecting same file later
       fileInput.value = "";
     });
   }
@@ -367,7 +363,7 @@ class StatisticalAgent {
   }
 
   standardizeMatrix(X) {
-    if (!X.length) return { X: [], means: [], stds: [] };
+    if (!X.length) return { X: [] };
     const p = X[0].length;
     const means = Array(p).fill(0);
     const stds = Array(p).fill(1);
@@ -486,7 +482,231 @@ class StatisticalAgent {
     });
   }
 
-  /* ---------- Run Loop (one mode only) ---------- */
+  /* ---------- Auto Mode ---------- */
+  startAutoMode() {
+    const targetSelect = document.getElementById("target-variable");
+    const predictorSelect = document.getElementById("predictor-variables");
+    const groupSizeInput = document.getElementById("predictor-group-size");
+
+    this.targetVariable = targetSelect.value;
+    const selectedPredictors = Array.from(predictorSelect.selectedOptions).map((o) => o.value);
+    const groupSize = parseInt(groupSizeInput?.value || 2);
+
+    if (!this.targetVariable) {
+      alert("Please select a target variable first");
+      return;
+    }
+    if (selectedPredictors.length < groupSize) {
+      alert(`Please select at least ${groupSize} predictor variables`);
+      return;
+    }
+
+    this.combinations = this.generateCombinations(selectedPredictors, groupSize);
+    this.combinationResults = [];
+    this.currentCombinationIndex = 0;
+
+    document.getElementById("combination-progress").classList.remove("hidden");
+    document.getElementById("combination-results").classList.add("hidden");
+    this.updateProgressDisplay();
+
+    this.isRunning = true;
+    this.startTime = Date.now();
+    document.getElementById("status-dot").classList.add("status-running");
+    document.getElementById("status-text").textContent = "Auto Mode";
+    document.getElementById("toggle-btn").innerHTML = '<i data-lucide="pause" class="w-4 h-4"></i><span>Stop</span>';
+    lucide.createIcons();
+
+    const interval = parseInt(document.getElementById("interval").value) * 1000;
+    this.runAutoCombination();
+    this.intervalId = setInterval(() => this.runAutoCombination(), interval);
+    this.uptimeInterval = setInterval(() => this.updateUptime(), 1000);
+
+    this.log(`Auto mode started - testing ${this.combinations.length} combinations`, "green");
+  }
+
+  generateCombinations(items, k) {
+    const result = [];
+    const n = items.length;
+
+    function backtrack(start, current) {
+      if (current.length === k) {
+        result.push([...current]);
+        return;
+      }
+      for (let i = start; i < n; i++) {
+        current.push(items[i]);
+        backtrack(i + 1, current);
+        current.pop();
+      }
+    }
+    backtrack(0, []);
+    return result;
+  }
+
+  scoreCombinationLinear(data, predictors, target) {
+    const { X, y } = this.buildMatrixAndVector(data, predictors, target);
+    if (X.length < predictors.length + 2) return { score: 0, label: "R²" };
+
+    if (
+      AUTOSTAT_CONFIG.autoMode.useMultipleLinearRegression &&
+      typeof ss !== "undefined" &&
+      typeof ss.multipleLinearRegression === "function"
+    ) {
+      try {
+        const rows = X.map((row, i) => [...row, y[i]]);
+        const coefs = ss.multipleLinearRegression(rows);
+        const preds = X.map((row) => coefs[0] + row.reduce((s, v, j) => s + v * coefs[j + 1], 0));
+        const r2 = this.computeR2(y, preds);
+        return { score: r2, label: "R²" };
+      } catch (_) {
+        // fallback below
+      }
+    }
+
+    const X1 = X.map((row) => row.reduce((a, b) => a + b, 0) / row.length);
+    const res = this.linearRegression(X1, y);
+    return { score: res.r2, label: "R²" };
+  }
+
+  scoreCombinationLogistic(data, predictors, target) {
+    const { X: Xraw, y: yRaw } = this.buildMatrixAndVector(data, predictors, target);
+    if (Xraw.length < 10) return { score: 0, label: "Accuracy" };
+
+    const y = this.binarizeTarget(yRaw);
+    let X = Xraw;
+    if (AUTOSTAT_CONFIG.logistic.standardizeX) X = this.standardizeMatrix(Xraw).X;
+
+    const res = this.logisticRegression(X, y);
+    return { score: res.accuracy, label: "Accuracy" };
+  }
+
+  async runAutoCombination() {
+    if (this.currentCombinationIndex >= this.combinations.length) {
+      this.completeAutoMode();
+      return;
+    }
+
+    const predictors = this.combinations[this.currentCombinationIndex];
+    const sampleSize = parseInt(document.getElementById("sample-size").value);
+    const analysisType = this.getAnalysisType();
+
+    document.getElementById("current-combination").textContent = `Testing: ${predictors.join(" + ")}`;
+
+    const dataInfo = this.getDataForAnalysis(sampleSize);
+    const { data } = dataInfo;
+
+    const scored =
+      analysisType === "logistic"
+        ? this.scoreCombinationLogistic(data, predictors.slice(0, AUTOSTAT_CONFIG.logistic.maxPredictorsPerRun), this.targetVariable)
+        : this.scoreCombinationLinear(data, predictors, this.targetVariable);
+
+    this.combinationResults.push({
+      predictors,
+      target: this.targetVariable,
+      score: scored.score,
+      metricLabel: scored.label,
+      type: analysisType,
+    });
+
+    if (typeof playPing === "function") playPing();
+
+    this.currentCombinationIndex++;
+    this.updateProgressDisplay();
+    this.updateDashboard();
+
+    this.log(
+      `Combination ${this.currentCombinationIndex}/${this.combinations.length}: [${predictors.join(", ")}] → ${scored.label}=${fmt(scored.score, 4)}`,
+      analysisType === "logistic" ? "purple" : "blue"
+    );
+  }
+
+  completeAutoMode() {
+    this.stop();
+
+    if (typeof playPing === "function") {
+      setTimeout(playPing, 220);
+      setTimeout(playPing, 520);
+    }
+
+    if (this.combinationResults.length === 0) {
+      this.log("Auto mode complete, but no valid models were scored.", "orange");
+      return;
+    }
+
+    const sorted = [...this.combinationResults].sort((a, b) => b.score - a.score);
+    const best = sorted[0];
+    const worst = sorted[sorted.length - 1];
+
+    document.getElementById("best-model").textContent = `${best.predictors.join(" + ")} → ${best.target}`;
+    document.getElementById("best-model-score").textContent = `${best.metricLabel} = ${fmt(best.score, 4)}`;
+
+    document.getElementById("worst-model").textContent = `${worst.predictors.join(" + ")} → ${worst.target}`;
+    document.getElementById("worst-model-score").textContent = `${worst.metricLabel} = ${fmt(worst.score, 4)}`;
+
+    document.getElementById("combination-results").classList.remove("hidden");
+    document.getElementById("combination-progress").classList.add("hidden");
+
+    this.createComparisonChart(sorted);
+
+    this.log(`Auto mode complete! Best ${best.metricLabel}=${fmt(best.score, 4)}, Worst ${worst.metricLabel}=${fmt(worst.score, 4)}`, "green");
+
+    document.getElementById("status-text").textContent = "Complete";
+    document.getElementById("status-dot").classList.remove("status-running");
+    document.getElementById("toggle-btn").innerHTML = '<i data-lucide="play" class="w-4 h-4"></i><span>Start New Analysis</span>';
+    lucide.createIcons();
+
+    this.isAutoMode = false;
+    this.currentCombinationIndex = 0;
+  }
+
+  createComparisonChart(sortedResults) {
+    if (this.comparisonChart) this.comparisonChart.destroy();
+
+    const metricLabel = sortedResults[0].metricLabel || "Score";
+    const scores = sortedResults.map((r) => r.score);
+    const min = Math.min(...scores);
+    const max = Math.max(...scores);
+
+    const ctx = document.getElementById("comparison-chart").getContext("2d");
+    this.comparisonChart = new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels: sortedResults.map((_, i) => `#${i + 1}`),
+        datasets: [{
+          label: metricLabel,
+          data: scores,
+          backgroundColor: sortedResults.map((_, i) =>
+            i === 0 ? "#10b981" : i === sortedResults.length - 1 ? "#ef4444" : "#6b7280"
+          ),
+          borderWidth: 1,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: (items) => sortedResults[items[0].dataIndex].predictors.join(" + "),
+              label: (item) => `${metricLabel} = ${Number.isFinite(item.raw) ? item.raw.toFixed(4) : "-"}`,
+            },
+          },
+        },
+        scales: {
+          y: {
+            beginAtZero: metricLabel !== "R²",
+            suggestedMin: metricLabel === "R²" ? Math.min(-1, min) : 0,
+            suggestedMax: metricLabel === "R²" ? Math.max(1, max) : 1,
+            title: { display: true, text: metricLabel },
+          },
+          x: { title: { display: true, text: "Model Rank" } },
+        },
+      },
+    });
+  }
+
+  /* ---------- Continuous run (single mode) ---------- */
   async runAnalysis() {
     const sampleSize = parseInt(document.getElementById("sample-size").value);
     const analysisType = this.getAnalysisType();
@@ -508,7 +728,7 @@ class StatisticalAgent {
     if (analysisType === "linear") {
       await this.runLinearRegression(data, predictors[0], targetVar);
     } else {
-      await this.runLogisticRegression(data, predictors.slice(0, Math.min(6, predictors.length)), targetVar);
+      await this.runLogisticRegression(data, predictors.slice(0, AUTOSTAT_CONFIG.logistic.maxPredictorsPerRun), targetVar);
     }
 
     if (typeof playPing === "function") playPing();
@@ -521,7 +741,6 @@ class StatisticalAgent {
       this.log("Linear: not enough clean rows after filtering missing values", "orange");
       return;
     }
-
     const x1 = X.map((row) => row[0]);
     const result = this.linearRegression(x1, y);
 
@@ -674,16 +893,44 @@ class StatisticalAgent {
     this.logisticChart.update("none");
   }
 
-  /* ---------- Start/Stop ---------- */
+  initCharts() {
+    const linearOptions = {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { x: { display: false }, y: { suggestedMin: -1, suggestedMax: 1 } },
+      elements: { point: { radius: 0 }, line: { tension: 0.25 } },
+    };
+
+    const logisticOptions = {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { x: { display: false }, y: { beginAtZero: true, suggestedMax: 1 } },
+      elements: { point: { radius: 0 }, line: { tension: 0.25 } },
+    };
+
+    this.linearChart = new Chart(document.getElementById("linear-chart"), {
+      type: "line",
+      data: { labels: [], datasets: [{ data: [], borderColor: "#3b82f6", backgroundColor: "rgba(59, 130, 246, 0.1)", fill: true, borderWidth: 2 }] },
+      options: linearOptions,
+    });
+
+    this.logisticChart = new Chart(document.getElementById("logistic-chart"), {
+      type: "line",
+      data: { labels: [], datasets: [{ data: [], borderColor: "#8b5cf6", backgroundColor: "rgba(139, 92, 246, 0.1)", fill: true, borderWidth: 2 }] },
+      options: logisticOptions,
+    });
+  }
+
   start() {
     if (this.isRunning) return;
 
     const autoModeCheckbox = document.getElementById("auto-predictor-mode");
     this.isAutoMode = autoModeCheckbox && autoModeCheckbox.checked;
 
-    // auto-mode not modified here (kept off for now)
     if (this.isAutoMode) {
-      this.log("Auto mode is currently disabled in this build. Uncheck Auto-Run to proceed.", "orange");
+      this.startAutoMode();
       return;
     }
 
@@ -698,8 +945,8 @@ class StatisticalAgent {
     const interval = parseInt(document.getElementById("interval").value) * 1000;
     this.runAnalysis();
     this.intervalId = setInterval(() => this.runAnalysis(), interval);
-
     this.uptimeInterval = setInterval(() => this.updateUptime(), 1000);
+
     this.log("Agent started - continuous analysis enabled", "green");
   }
 
@@ -726,11 +973,15 @@ class StatisticalAgent {
     const seconds = (elapsed % 60).toString().padStart(2, "0");
     document.getElementById("uptime").textContent = `${hours}:${minutes}:${seconds}`;
   }
+
+  updateProgressDisplay() {
+    const progress = this.combinations.length > 0 ? (this.currentCombinationIndex / this.combinations.length) * 100 : 0;
+    document.getElementById("progress-text").textContent = `${this.currentCombinationIndex} / ${this.combinations.length} completed`;
+    document.getElementById("progress-bar").style.width = `${progress}%`;
+  }
 }
 
-// Global agent instance
 const agent = new StatisticalAgent();
-
 function toggleAgent() {
   if (agent.isRunning) agent.stop();
   else agent.start();
