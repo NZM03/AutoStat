@@ -434,19 +434,66 @@ class StatisticalAgent {
 
   linearRegression(X, y) {
     const n = X.length;
-    const sumX = X.reduce((a, b) => a + b, 0);
-    const sumY = y.reduce((a, b) => a + b, 0);
-    const sumXY = X.reduce((total, xi, i) => total + xi * y[i], 0);
-    const sumX2 = X.reduce((total, xi) => total + xi * xi, 0);
+
+    const sumX = safeSum(X);
+    const sumY = safeSum(y);
+    const sumXY = safeSumXY(X, y);
+    const sumX2 = safeSumSq(X);
 
     const denom = (n * sumX2 - sumX * sumX);
     const slope = denom === 0 ? 0 : (n * sumXY - sumX * sumY) / denom;
     const intercept = (sumY - slope * sumX) / n;
 
     const preds = X.map((xi) => slope * xi + intercept);
-    const r2 = this.computeR2(y, preds);
+
+    const yMean = sumY / n;
+    let ssTotal = 0;
+    let ssResidual = 0;
+    for (let i = 0; i < n; i++) {
+      const d = y[i] - yMean;
+      ssTotal += d * d;
+      const r = y[i] - preds[i];
+      ssResidual += r * r;
+    }
+
+    const r2 = (ssTotal === 0) ? 0 : (1 - ssResidual / ssTotal);
+
+    const mathText =
+`Model: y = slope*x + intercept
+
+n = ${n}
+
+sumX  = ${sumX}
+sumY  = ${sumY}
+sumXY = ${sumXY}
+sumX2 = ${sumX2}
+
+denom = n*sumX2 - (sumX)^2
+      = ${n}*${sumX2} - (${sumX})^2
+      = ${denom}
+
+slope = (n*sumXY - sumX*sumY) / denom
+      = (${n}*${sumXY} - ${sumX}*${sumY}) / ${denom}
+      = ${slope}
+
+intercept = (sumY - slope*sumX) / n
+          = (${sumY} - ${slope}*${sumX}) / ${n}
+          = ${intercept}
+
+ȳ = sumY / n = ${yMean}
+
+SS_total    = Σ(yi - ȳ)^2 = ${ssTotal}
+SS_residual = Σ(yi - ŷi)^2 = ${ssResidual}
+
+R² = 1 - SS_residual / SS_total
+   = 1 - ${ssResidual} / ${ssTotal}
+   = ${r2}
+`;
+    writeMath("math-linear", mathText);
+
     return { slope, intercept, r2, predictions: preds };
   }
+
 
   logisticRegression(X, y, iterations = AUTOSTAT_CONFIG.logistic.iterations, learningRate = AUTOSTAT_CONFIG.logistic.learningRate) {
     const p = X[0].length;
@@ -467,6 +514,93 @@ class StatisticalAgent {
         for (let j = 0; j < p; j++) dw[j] += error * X[i][j];
         db += error;
       }
+
+
+  async logisticRegressionLive(X, y, iterations = AUTOSTAT_CONFIG.logistic.iterations, learningRate = AUTOSTAT_CONFIG.logistic.learningRate) {
+    const p = X[0].length;
+    let weights = Array(p).fill(0);
+    let bias = 0;
+
+    const sigmoid = (z) => 1 / (1 + Math.exp(-clamp(z, -35, 35)));
+
+    writeMath("math-logistic",
+`Binary logistic regression (gradient descent)
+
+sigmoid(z) = 1 / (1 + e^{-z})
+z_i = w·x_i + b
+
+iterations = ${iterations}
+learningRate = ${learningRate}
+p (predictors) = ${p}
+
+Starting w = [0, 0, ...], b = 0
+
+Progress:
+`);
+
+    const chunk = 50;
+
+    for (let iter = 1; iter <= iterations; iter++) {
+      if (!this.isRunning) break;
+
+      let dw = Array(p).fill(0);
+      let db = 0;
+
+      for (let i = 0; i < X.length; i++) {
+        const z = X[i].reduce((sum, xij, j) => sum + xij * weights[j], 0) + bias;
+        const pred = sigmoid(z);
+        const error = pred - y[i];
+
+        for (let j = 0; j < p; j++) dw[j] += error * X[i][j];
+        db += error;
+      }
+
+      for (let j = 0; j < p; j++) weights[j] -= (learningRate / X.length) * dw[j];
+      bias -= (learningRate / X.length) * db;
+
+      if (iter % chunk === 0 || iter === iterations) {
+        const probs = X.map((xi) => sigmoid(xi.reduce((s, xij, j) => s + xij * weights[j], 0) + bias));
+        const loss = logLoss(probs, y);
+
+        const showW = weights.slice(0, Math.min(6, weights.length)).map((v) => Number.isFinite(v) ? v.toFixed(6) : "NaN");
+        const wTail = weights.length > 6 ? ", ..." : "";
+
+        const existing = document.getElementById("math-logistic")?.textContent || "";
+        writeMath("math-logistic",
+`${existing}
+iter ${iter}/${iterations}
+  b = ${bias.toFixed(6)}
+  w = [${showW.join(", ")}${wTail}]
+  log-loss ≈ ${loss.toFixed(6)}
+`);
+
+        await new Promise(requestAnimationFrame);
+      }
+    }
+
+    const predictions = X.map((xi) => {
+      const z = xi.reduce((sum, xij, j) => sum + xij * weights[j], 0) + bias;
+      return sigmoid(z) > AUTOSTAT_CONFIG.logistic.threshold ? 1 : 0;
+    });
+
+    const accuracy = predictions.filter((pHat, i) => pHat === y[i]).length / y.length;
+    const tp = predictions.filter((pHat, i) => pHat === 1 && y[i] === 1).length;
+    const fp = predictions.filter((pHat, i) => pHat === 1 && y[i] === 0).length;
+    const precision = tp / (tp + fp) || 0;
+
+    const existing = document.getElementById("math-logistic")?.textContent || "";
+    writeMath("math-logistic",
+`${existing}
+
+Final:
+  threshold = ${AUTOSTAT_CONFIG.logistic.threshold}
+  accuracy = ${accuracy.toFixed(6)}
+  precision = ${precision.toFixed(6)}
+`);
+
+    return { weights, bias, accuracy, precision, predictions };
+  }
+
 
       for (let j = 0; j < p; j++) weights[j] -= (learningRate / X.length) * dw[j];
       bias -= (learningRate / X.length) * db;
@@ -799,7 +933,7 @@ class StatisticalAgent {
     let X = Xraw;
     if (AUTOSTAT_CONFIG.logistic.standardizeX) X = this.standardizeMatrix(Xraw).X;
 
-    const result = this.logisticRegression(X, y);
+    const result = await this.logisticRegressionLive(X, y);
 
     this.stats.logistic.count++;
     this.stats.logistic.accuracies.push(result.accuracy);
