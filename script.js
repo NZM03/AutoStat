@@ -35,6 +35,13 @@ function writeMath(id, text) {
   el.textContent = text;
 }
 
+function appendMath(id, more, maxChars = 20000) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const next = (el.textContent || "") + more;
+  el.textContent = next.length > maxChars ? next.slice(next.length - maxChars) : next;
+}
+
 function safeSum(arr) {
   let s = 0;
   for (const v of arr) s += v;
@@ -456,6 +463,66 @@ class StatisticalAgent {
       ssResidual += r * r;
     }
 
+
+  async linearRegressionLive(X, y) {
+    // Stream the computation in steps so users can watch the math unfold.
+    const n = X.length;
+
+    writeMath("math-linear", "Computing linear regression...\n");
+
+    await new Promise((r) => setTimeout(r, 0));
+
+    const sumX = safeSum(X);
+    const sumY = safeSum(y);
+    appendMath("math-linear", `n = ${n}\n\nsumX = ${sumX}\nsumY = ${sumY}\n`);
+
+    await new Promise((r) => setTimeout(r, 0));
+
+    const sumXY = safeSumXY(X, y);
+    const sumX2 = safeSumSq(X);
+    appendMath("math-linear", `sumXY = ${sumXY}\nsumX2 = ${sumX2}\n`);
+
+    await new Promise((r) => setTimeout(r, 0));
+
+    const denom = (n * sumX2 - sumX * sumX);
+    const slope = denom === 0 ? 0 : (n * sumXY - sumX * sumY) / denom;
+    const intercept = (sumY - slope * sumX) / n;
+
+    appendMath(
+      "math-linear",
+      `\nDenominator (denom) = n*sumX2 - (sumX)^2 = ${denom}\n` +
+      `slope = (n*sumXY - sumX*sumY)/denom = ${slope}\n` +
+      `intercept = (sumY - slope*sumX)/n = ${intercept}\n`
+    );
+
+    await new Promise((r) => setTimeout(r, 0));
+
+    const preds = X.map((xi) => slope * xi + intercept);
+
+    const yMean = sumY / n;
+    let ssTotal = 0;
+    let ssResidual = 0;
+    for (let i = 0; i < n; i++) {
+      const d = y[i] - yMean;
+      ssTotal += d * d;
+      const r = y[i] - preds[i];
+      ssResidual += r * r;
+    }
+    const r2 = (ssTotal === 0) ? 0 : (1 - ssResidual / ssTotal);
+
+    appendMath(
+      "math-linear",
+      `\nŷi = slope*xi + intercept\n` +
+      `ȳ = ${yMean}\n` +
+      `SS_total = Σ(yi - ȳ)^2 = ${ssTotal}\n` +
+      `SS_residual = Σ(yi - ŷi)^2 = ${ssResidual}\n` +
+      `R² = 1 - SS_residual/SS_total = ${r2}\n`
+    );
+
+    return { slope, intercept, r2, predictions: preds };
+  }
+
+
     const r2 = (ssTotal === 0) ? 0 : (1 - ssResidual / ssTotal);
 
     const mathText =
@@ -526,16 +593,23 @@ R² = 1 - SS_residual / SS_total
     writeMath("math-logistic",
 `Binary logistic regression (gradient descent)
 
-sigmoid(z) = 1 / (1 + e^{-z})
-z_i = w·x_i + b
+` +
+`sigmoid(z) = 1 / (1 + e^{-z})
+` +
+`z_i = w·x_i + b
 
-iterations = ${iterations}
-learningRate = ${learningRate}
-p (predictors) = ${p}
+` +
+`iterations = ${iterations}
+` +
+`learningRate = ${learningRate}
+` +
+`p (predictors) = ${p}
 
-Starting w = [0, 0, ...], b = 0
+` +
+`Starting w = [0, 0, ...], b = 0
 
-Progress:
+` +
+`Progress:
 `);
 
     const chunk = 50;
@@ -740,6 +814,8 @@ Final:
     const { X: Xraw, y: yRaw } = this.buildMatrixAndVector(data, predictors, target);
     if (Xraw.length < 10) return { score: 0, label: "Accuracy" };
 
+    writeMath("math-logistic", "Preparing logistic regression...
+");
     const y = this.binarizeTarget(yRaw);
     let X = Xraw;
     if (AUTOSTAT_CONFIG.logistic.standardizeX) X = this.standardizeMatrix(Xraw).X;
@@ -910,7 +986,7 @@ Final:
       return;
     }
     const x1 = X.map((row) => row[0]);
-    const result = this.linearRegression(x1, y);
+    const result = await this.linearRegressionLive(x1, y);
 
     this.stats.linear.count++;
     this.stats.linear.r2Scores.push(result.r2);
