@@ -1,4 +1,4 @@
-const CACHE_NAME = "autostat-cache-v5";
+const CACHE_NAME = "autostat-cache-v6";
 const ASSETS = [
   "./",
   "./index.html",
