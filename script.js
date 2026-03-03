@@ -1,4 +1,4 @@
-// AutoStat AI Agent - Statistical Analysis Engine (fixed charts, single-mode, upload once)
+// AutoStat AI Agent - Statistical Analysis Engine (upload reverted + exact chime)
 
 const AUTOSTAT_CONFIG = {
   maxResultsCards: 10,
@@ -9,12 +9,12 @@ const AUTOSTAT_CONFIG = {
     iterations: 900,
     learningRate: 0.12,
     threshold: 0.5,
-    binarizeMethod: "median", // "median" | "mean"
-    standardizeX: true,       // helps prevent NaN/overflow with many predictors
+    binarizeMethod: "median",
+    standardizeX: true,
   },
 
   autoMode: {
-    useMultipleLinearRegression: true, // uses simple-statistics if available
+    useMultipleLinearRegression: true,
   },
 
   missing: {
@@ -25,7 +25,6 @@ const AUTOSTAT_CONFIG = {
 function fmt(n, digits = 4) {
   return Number.isFinite(n) ? n.toFixed(digits) : "-";
 }
-
 function clamp(x, lo, hi) {
   return Math.max(lo, Math.min(hi, x));
 }
@@ -85,16 +84,119 @@ class StatisticalAgent {
     apply();
   }
 
-  /* =========================
-     Numeric + cleaning helpers
-     ========================= */
+  /* ---------- Upload (reverted to simple, reliable) ---------- */
+  initFileUpload() {
+    const fileInput = document.getElementById("excel-file");
+    const uploadArea = document.getElementById("upload-area");
+
+    // Click to upload (ignore clicking the input itself)
+    uploadArea.addEventListener("click", (e) => {
+      if (e.target !== fileInput) fileInput.click();
+    });
+
+    // Drag and drop
+    uploadArea.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      uploadArea.classList.add("border-purple-500", "bg-purple-50");
+    });
+
+    uploadArea.addEventListener("dragleave", () => {
+      uploadArea.classList.remove("border-purple-500", "bg-purple-50");
+    });
+
+    uploadArea.addEventListener("drop", (e) => {
+      e.preventDefault();
+      uploadArea.classList.remove("border-purple-500", "bg-purple-50");
+      const files = e.dataTransfer.files;
+      if (files.length > 0) this.handleFile(files[0]);
+      // allow re-selecting same file later
+      fileInput.value = "";
+    });
+
+    // File selection
+    fileInput.addEventListener("change", (e) => {
+      if (e.target.files.length > 0) this.handleFile(e.target.files[0]);
+      // allow re-selecting same file later
+      fileInput.value = "";
+    });
+  }
+
+  handleFile(file) {
+    if (!file.name.match(/\.(xlsx|xls)$/i)) {
+      alert("Please upload an Excel file (.xlsx or .xls)");
+      return;
+    }
+
+    document.getElementById("filename-display").textContent = file.name;
+
+    const reader = new FileReader();
+    reader.onerror = () => {
+      alert("Error reading file. Please try again.");
+      this.log("File read error", "orange");
+    };
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: "array" });
+        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+        const jsonData = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
+        this.parseExcelData(jsonData);
+        this.log(`File uploaded: ${file.name}`, "green");
+      } catch (error) {
+        console.error("Error parsing Excel:", error);
+        alert("Error parsing Excel file. Please try again.");
+        this.log("Error parsing Excel file", "orange");
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  parseExcelData(rawData) {
+    if (rawData.length < 2) {
+      alert("Excel file must have at least a header row and one data row");
+      return;
+    }
+
+    const headers = rawData[0].map((h, i) => (h ? String(h).trim() : `Column_${i + 1}`));
+    const data = [];
+
+    for (let i = 1; i < rawData.length; i++) {
+      const row = rawData[i];
+      if (!row || row.length === 0) continue;
+
+      const rowData = {};
+      let hasValidData = false;
+
+      headers.forEach((header, index) => {
+        const value = row[index];
+        const numValue = parseFloat(value);
+        rowData[header] = (value !== undefined && value !== "" && !isNaN(numValue)) ? numValue : value;
+        if (value !== undefined && value !== "") hasValidData = true;
+      });
+
+      if (hasValidData) data.push(rowData);
+    }
+
+    this.uploadedData = data;
+    this.uploadedColumns = headers;
+
+    const numericCount = headers.filter((h) => this.isNumericColumn(h)).length;
+    document.getElementById("file-stats").textContent =
+      `${data.length} rows × ${headers.length} columns | ${numericCount} numeric columns`;
+    document.getElementById("file-info").classList.remove("hidden");
+
+    this.populateVariableSelectors(headers);
+    document.getElementById("variable-selection").classList.remove("hidden");
+    this.showDataPreview(data, headers);
+
+    this.log(`Parsed ${data.length} rows with ${headers.length} columns`, "green");
+  }
 
   isNumericColumn(columnName) {
     if (!this.uploadedData || this.uploadedData.length === 0) return true;
 
     let numericCount = 0;
     let totalCount = 0;
-
     for (const row of this.uploadedData.slice(0, 15)) {
       const val = row[columnName];
       if (val !== undefined && val !== null && val !== "") {
@@ -105,6 +207,126 @@ class StatisticalAgent {
     return totalCount > 0 && numericCount / totalCount > 0.6;
   }
 
+  populateVariableSelectors(headers) {
+    const targetSelect = document.getElementById("target-variable");
+    const predictorSelect = document.getElementById("predictor-variables");
+
+    targetSelect.innerHTML = '<option value="">Select target...</option>';
+    predictorSelect.innerHTML = "";
+
+    const numericHeaders = headers.filter((h) => this.isNumericColumn(h));
+
+    headers.forEach((header) => {
+      const isNumeric = this.isNumericColumn(header);
+      const optionText = isNumeric ? header : `${header} (non-numeric)`;
+
+      const targetOption = document.createElement("option");
+      targetOption.value = header;
+      targetOption.textContent = optionText;
+      if (!isNumeric) targetOption.disabled = true;
+      targetSelect.appendChild(targetOption);
+
+      const predictorOption = document.createElement("option");
+      predictorOption.value = header;
+      predictorOption.textContent = optionText;
+      if (!isNumeric) predictorOption.disabled = true;
+      predictorSelect.appendChild(predictorOption);
+    });
+
+    const pickPreds = numericHeaders.slice(0, 3);
+    for (const opt of predictorSelect.options) opt.selected = pickPreds.includes(opt.value);
+    if (numericHeaders.length > 0) targetSelect.value = numericHeaders[numericHeaders.length - 1];
+  }
+
+  showDataPreview(data, headers) {
+    const previewContainer = document.getElementById("data-preview");
+    const thead = document.getElementById("preview-header");
+    const tbody = document.getElementById("preview-body");
+
+    thead.innerHTML =
+      "<tr>" +
+      headers.map((h) => `<th class="px-3 py-2 text-left font-medium text-gray-700 border-b">${h}</th>`).join("") +
+      "</tr>";
+
+    tbody.innerHTML = data.slice(0, 5).map((row) =>
+      "<tr class='border-b'>" +
+      headers.map((h) => `<td class="px-3 py-2 text-gray-600 truncate max-w-xs">${row[h] ?? ""}</td>`).join("") +
+      "</tr>"
+    ).join("");
+
+    previewContainer.classList.remove("hidden");
+  }
+
+  /* ---------- Data generation ---------- */
+  generateVariableNames() {
+    const prefixes = ["Revenue","Traffic","Conversion","Engagement","Retention","Satisfaction","Churn","Growth","Efficiency","Quality","Speed","Cost","Profit","Risk","Score"];
+    const suffixes = ["Rate","Index","Level","Count","Ratio","Value","Metric"];
+
+    this.variableNames = [];
+    for (let i = 0; i < 20; i++) {
+      const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+      const suffix = suffixes[Math.floor(Math.random() * suffixes.length)];
+      this.variableNames.push(`${prefix}_${suffix}_${String.fromCharCode(65 + i)}`);
+    }
+  }
+
+  generateData(sampleSize, numVars) {
+    const data = [];
+    const selectedVars = this.variableNames.slice(0, numVars);
+    const baseTrend = Array.from({ length: sampleSize }, (_, i) => i / sampleSize);
+
+    for (let i = 0; i < sampleSize; i++) {
+      const row = {};
+      selectedVars.forEach((varName) => {
+        const noise = (Math.random() - 0.5) * 0.3;
+        const trendComponent = baseTrend[i] * (0.5 + Math.random());
+        row[varName] = trendComponent + noise + Math.random() * 0.5;
+      });
+      data.push(row);
+    }
+
+    return {
+      data,
+      predictors: selectedVars.slice(0, Math.max(1, selectedVars.length - 1)),
+      targetVar: selectedVars[selectedVars.length - 1],
+      isUploaded: false
+    };
+  }
+
+  getDataForAnalysis(sampleSize) {
+    const dataMode = document.getElementById("data-mode").value;
+
+    if (dataMode === "mixed" && this.uploadedData) {
+      this.stats.mixedFlip++;
+      if (this.stats.mixedFlip % 2 === 1) return this.generateData(sampleSize, 5);
+    }
+
+    if (dataMode === "generated" || !this.uploadedData) {
+      return this.generateData(sampleSize, 5);
+    }
+
+    let data = this.uploadedData;
+    if (sampleSize < data.length) {
+      const indices = new Set();
+      while (indices.size < sampleSize) indices.add(Math.floor(Math.random() * data.length));
+      data = Array.from(indices).map((i) => data[i]);
+    }
+
+    const targetVar = document.getElementById("target-variable").value;
+
+    const predictorVars = Array.from(document.getElementById("predictor-variables").selectedOptions)
+      .map((o) => o.value)
+      .filter((v) => v !== targetVar);
+
+    const effectivePredictors =
+      predictorVars.length > 0
+        ? predictorVars
+        : this.uploadedColumns.filter((c) => this.isNumericColumn(c) && c !== targetVar);
+
+    return { data, predictors: effectivePredictors, targetVar: targetVar || effectivePredictors[effectivePredictors.length - 1], isUploaded: true };
+  }
+
+  /* ---------- Modeling helpers ---------- */
   computeR2(y, yhat) {
     if (!y.length || y.length !== yhat.length) return 0;
     if (yhat.some((v) => !Number.isFinite(v))) return 0;
@@ -166,8 +388,7 @@ class StatisticalAgent {
       stds[j] = st > 1e-10 ? st : 1;
     }
 
-    const Z = X.map((row) => row.map((v, j) => (v - means[j]) / stds[j]));
-    return { X: Z, means, stds };
+    return { X: X.map((row) => row.map((v, j) => (v - means[j]) / stds[j])) };
   }
 
   binarizeTarget(yRaw) {
@@ -180,261 +401,6 @@ class StatisticalAgent {
     const median = sorted[Math.floor(sorted.length / 2)];
     return yRaw.map((v) => (v > median ? 1 : 0));
   }
-
-  /* =========================
-     File upload (fixed: 1 upload)
-     ========================= */
-
-  initFileUpload() {
-    const fileInput = document.getElementById("excel-file");
-    const uploadArea = document.getElementById("upload-area");
-    const chooseBtn = document.getElementById("choose-file-btn");
-
-    if (!fileInput || !uploadArea) return;
-
-    const openPicker = (e) => {
-      if (e) {
-        e.preventDefault();
-        e.stopPropagation();
-      }
-      // IMPORTANT: clear so selecting the same file triggers change
-      fileInput.value = "";
-      fileInput.click();
-    };
-
-    // Clicking the upload area opens picker, but NOT when clicking the button inside
-    uploadArea.addEventListener("click", (e) => {
-      if (e.target && e.target.closest && e.target.closest("button")) return;
-      openPicker(e);
-    });
-
-    if (chooseBtn) {
-      chooseBtn.addEventListener("click", openPicker);
-    }
-
-    // Drag and drop
-    uploadArea.addEventListener("dragover", (e) => {
-      e.preventDefault();
-      uploadArea.classList.add("border-purple-500", "bg-purple-50");
-    });
-
-    uploadArea.addEventListener("dragleave", () => {
-      uploadArea.classList.remove("border-purple-500", "bg-purple-50");
-    });
-
-    uploadArea.addEventListener("drop", (e) => {
-      e.preventDefault();
-      uploadArea.classList.remove("border-purple-500", "bg-purple-50");
-      const files = e.dataTransfer.files;
-      if (files.length > 0) this.handleFile(files[0]);
-      fileInput.value = "";
-    });
-
-    // File selection
-    fileInput.addEventListener("change", (e) => {
-      if (e.target.files.length > 0) this.handleFile(e.target.files[0]);
-      // Clear after handling so a same-file selection works next time
-      fileInput.value = "";
-    });
-  }
-
-  handleFile(file) {
-    if (!file.name.match(/\.(xlsx|xls)$/i)) {
-      alert("Please upload an Excel file (.xlsx or .xls)");
-      return;
-    }
-
-    document.getElementById("filename-display").textContent = file.name;
-
-    const reader = new FileReader();
-    reader.onerror = () => {
-      alert("Error reading file. Please try again.");
-      this.log("File read error", "orange");
-    };
-
-    reader.onload = (e) => {
-      try {
-        const data = new Uint8Array(e.target.result);
-        const workbook = XLSX.read(data, { type: "array" });
-        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-        const jsonData = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
-        this.parseExcelData(jsonData);
-        this.log(`File uploaded: ${file.name}`, "green");
-      } catch (error) {
-        console.error("Error parsing Excel:", error);
-        alert("Error parsing Excel file. Please try again.");
-        this.log("Error parsing Excel file", "orange");
-      }
-    };
-
-    reader.readAsArrayBuffer(file);
-  }
-
-  parseExcelData(rawData) {
-    if (rawData.length < 2) {
-      alert("Excel file must have at least a header row and one data row");
-      return;
-    }
-
-    const headers = rawData[0].map((h, i) => (h ? String(h).trim() : `Column_${i + 1}`));
-    const data = [];
-
-    for (let i = 1; i < rawData.length; i++) {
-      const row = rawData[i];
-      if (!row || row.length === 0) continue;
-
-      const rowData = {};
-      let hasValidData = false;
-
-      headers.forEach((header, index) => {
-        const value = row[index];
-        const numValue = parseFloat(value);
-        rowData[header] = (value !== undefined && value !== "" && !isNaN(numValue)) ? numValue : value;
-        if (value !== undefined && value !== "") hasValidData = true;
-      });
-
-      if (hasValidData) data.push(rowData);
-    }
-
-    this.uploadedData = data;
-    this.uploadedColumns = headers;
-
-    const numericCount = headers.filter((h) => this.isNumericColumn(h)).length;
-
-    document.getElementById("file-stats").textContent =
-      `${data.length} rows × ${headers.length} columns | ${numericCount} numeric columns`;
-    document.getElementById("file-info").classList.remove("hidden");
-
-    this.populateVariableSelectors(headers);
-    document.getElementById("variable-selection").classList.remove("hidden");
-    this.showDataPreview(data, headers);
-
-    this.log(`Parsed ${data.length} rows with ${headers.length} columns`, "green");
-  }
-
-  populateVariableSelectors(headers) {
-    const targetSelect = document.getElementById("target-variable");
-    const predictorSelect = document.getElementById("predictor-variables");
-
-    targetSelect.innerHTML = '<option value="">Select target...</option>';
-    predictorSelect.innerHTML = "";
-
-    const numericHeaders = headers.filter((h) => this.isNumericColumn(h));
-
-    headers.forEach((header) => {
-      const isNumeric = this.isNumericColumn(header);
-      const optionText = isNumeric ? header : `${header} (non-numeric)`;
-
-      const targetOption = document.createElement("option");
-      targetOption.value = header;
-      targetOption.textContent = optionText;
-      if (!isNumeric) targetOption.disabled = true;
-      targetSelect.appendChild(targetOption);
-
-      const predictorOption = document.createElement("option");
-      predictorOption.value = header;
-      predictorOption.textContent = optionText;
-      if (!isNumeric) predictorOption.disabled = true;
-      predictorSelect.appendChild(predictorOption);
-    });
-
-    // Auto-select first 3 numeric predictors
-    const pickPreds = numericHeaders.slice(0, 3);
-    for (const opt of predictorSelect.options) opt.selected = pickPreds.includes(opt.value);
-
-    // Auto-select target as last numeric column
-    if (numericHeaders.length > 0) targetSelect.value = numericHeaders[numericHeaders.length - 1];
-  }
-
-  showDataPreview(data, headers) {
-    const previewContainer = document.getElementById("data-preview");
-    const thead = document.getElementById("preview-header");
-    const tbody = document.getElementById("preview-body");
-
-    thead.innerHTML =
-      "<tr>" +
-      headers.map((h) => `<th class="px-3 py-2 text-left font-medium text-gray-700 border-b">${h}</th>`).join("") +
-      "</tr>";
-
-    tbody.innerHTML = data.slice(0, 5).map((row) =>
-      "<tr class='border-b'>" +
-      headers.map((h) => `<td class="px-3 py-2 text-gray-600 truncate max-w-xs">${row[h] ?? ""}</td>`).join("") +
-      "</tr>"
-    ).join("");
-
-    previewContainer.classList.remove("hidden");
-  }
-
-  /* =========================
-     Data generation / selection
-     ========================= */
-
-  generateVariableNames() {
-    const prefixes = ["Revenue","Traffic","Conversion","Engagement","Retention","Satisfaction","Churn","Growth","Efficiency","Quality","Speed","Cost","Profit","Risk","Score"];
-    const suffixes = ["Rate","Index","Level","Count","Ratio","Value","Metric"];
-
-    this.variableNames = [];
-    for (let i = 0; i < 20; i++) {
-      const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
-      const suffix = suffixes[Math.floor(Math.random() * suffixes.length)];
-      this.variableNames.push(`${prefix}_${suffix}_${String.fromCharCode(65 + i)}`);
-    }
-  }
-
-  generateData(sampleSize, numVars) {
-    const data = [];
-    const selectedVars = this.variableNames.slice(0, numVars);
-    const baseTrend = Array.from({ length: sampleSize }, (_, i) => i / sampleSize);
-
-    for (let i = 0; i < sampleSize; i++) {
-      const row = {};
-      selectedVars.forEach((varName) => {
-        const noise = (Math.random() - 0.5) * 0.3;
-        const trendComponent = baseTrend[i] * (0.5 + Math.random());
-        row[varName] = trendComponent + noise + Math.random() * 0.5;
-      });
-      data.push(row);
-    }
-
-    return { data, predictors: selectedVars.slice(0, Math.max(1, selectedVars.length - 1)), targetVar: selectedVars[selectedVars.length - 1], isUploaded: false };
-  }
-
-  getDataForAnalysis(sampleSize) {
-    const dataMode = document.getElementById("data-mode").value;
-
-    if (dataMode === "mixed" && this.uploadedData) {
-      this.stats.mixedFlip++;
-      if (this.stats.mixedFlip % 2 === 1) return this.generateData(sampleSize, 5);
-    }
-
-    if (dataMode === "generated" || !this.uploadedData) {
-      return this.generateData(sampleSize, 5);
-    }
-
-    let data = this.uploadedData;
-    if (sampleSize < data.length) {
-      const indices = new Set();
-      while (indices.size < sampleSize) indices.add(Math.floor(Math.random() * data.length));
-      data = Array.from(indices).map((i) => data[i]);
-    }
-
-    const targetVar = document.getElementById("target-variable").value;
-
-    const predictorVars = Array.from(document.getElementById("predictor-variables").selectedOptions)
-      .map((o) => o.value)
-      .filter((v) => v !== targetVar);
-
-    const effectivePredictors =
-      predictorVars.length > 0
-        ? predictorVars
-        : this.uploadedColumns.filter((c) => this.isNumericColumn(c) && c !== targetVar);
-
-    return { data, predictors: effectivePredictors, targetVar: targetVar || effectivePredictors[effectivePredictors.length - 1], isUploaded: true };
-  }
-
-  /* =========================
-     Models
-     ========================= */
 
   linearRegression(X, y) {
     const n = X.length;
@@ -449,7 +415,6 @@ class StatisticalAgent {
 
     const preds = X.map((xi) => slope * xi + intercept);
     const r2 = this.computeR2(y, preds);
-
     return { slope, intercept, r2, predictions: preds };
   }
 
@@ -490,19 +455,13 @@ class StatisticalAgent {
     return { weights, bias, accuracy, precision, predictions };
   }
 
-  /* =========================
-     Charts (fixed: linear can be negative)
-     ========================= */
-
+  /* ---------- Charts ---------- */
   initCharts() {
     const linearOptions = {
       responsive: true,
       maintainAspectRatio: false,
       plugins: { legend: { display: false } },
-      scales: {
-        x: { display: false },
-        y: { suggestedMin: -1, suggestedMax: 1 }
-      },
+      scales: { x: { display: false }, y: { suggestedMin: -1, suggestedMax: 1 } },
       elements: { point: { radius: 0 }, line: { tension: 0.25 } },
     };
 
@@ -510,48 +469,24 @@ class StatisticalAgent {
       responsive: true,
       maintainAspectRatio: false,
       plugins: { legend: { display: false } },
-      scales: {
-        x: { display: false },
-        y: { beginAtZero: true, suggestedMax: 1 }
-      },
+      scales: { x: { display: false }, y: { beginAtZero: true, suggestedMax: 1 } },
       elements: { point: { radius: 0 }, line: { tension: 0.25 } },
     };
 
     this.linearChart = new Chart(document.getElementById("linear-chart"), {
       type: "line",
-      data: {
-        labels: [],
-        datasets: [{
-          data: [],
-          borderColor: "#3b82f6",
-          backgroundColor: "rgba(59, 130, 246, 0.1)",
-          fill: true,
-          borderWidth: 2,
-        }],
-      },
+      data: { labels: [], datasets: [{ data: [], borderColor: "#3b82f6", backgroundColor: "rgba(59, 130, 246, 0.1)", fill: true, borderWidth: 2 }] },
       options: linearOptions,
     });
 
     this.logisticChart = new Chart(document.getElementById("logistic-chart"), {
       type: "line",
-      data: {
-        labels: [],
-        datasets: [{
-          data: [],
-          borderColor: "#8b5cf6",
-          backgroundColor: "rgba(139, 92, 246, 0.1)",
-          fill: true,
-          borderWidth: 2,
-        }],
-      },
+      data: { labels: [], datasets: [{ data: [], borderColor: "#8b5cf6", backgroundColor: "rgba(139, 92, 246, 0.1)", fill: true, borderWidth: 2 }] },
       options: logisticOptions,
     });
   }
 
-  /* =========================
-     Runs (single mode only)
-     ========================= */
-
+  /* ---------- Run Loop (one mode only) ---------- */
   async runAnalysis() {
     const sampleSize = parseInt(document.getElementById("sample-size").value);
     const analysisType = this.getAnalysisType();
@@ -564,7 +499,6 @@ class StatisticalAgent {
       return;
     }
 
-    // Keep counters
     this.stats.totalRuns++;
     this.stats.dataPoints += data.length * predictors.length;
 
@@ -573,7 +507,7 @@ class StatisticalAgent {
 
     if (analysisType === "linear") {
       await this.runLinearRegression(data, predictors[0], targetVar);
-    } else if (analysisType === "logistic") {
+    } else {
       await this.runLogisticRegression(data, predictors.slice(0, Math.min(6, predictors.length)), targetVar);
     }
 
@@ -595,7 +529,6 @@ class StatisticalAgent {
     this.stats.linear.r2Scores.push(result.r2);
     this.stats.linear.slopes.push(result.slope);
     this.stats.linear.bestR2 = Math.max(this.stats.linear.bestR2, result.r2);
-
     if (this.stats.linear.r2Scores.length > AUTOSTAT_CONFIG.chartWindow) this.stats.linear.r2Scores.shift();
 
     this.log(`Linear: ${predictor} → ${target} | R²=${fmt(result.r2, 4)} | slope=${fmt(result.slope, 4)}`, "blue");
@@ -610,11 +543,8 @@ class StatisticalAgent {
     }
 
     const y = this.binarizeTarget(yRaw);
-
     let X = Xraw;
-    if (AUTOSTAT_CONFIG.logistic.standardizeX) {
-      X = this.standardizeMatrix(Xraw).X;
-    }
+    if (AUTOSTAT_CONFIG.logistic.standardizeX) X = this.standardizeMatrix(Xraw).X;
 
     const result = this.logisticRegression(X, y);
 
@@ -622,252 +552,13 @@ class StatisticalAgent {
     this.stats.logistic.accuracies.push(result.accuracy);
     this.stats.logistic.precisions.push(result.precision);
     this.stats.logistic.bestAcc = Math.max(this.stats.logistic.bestAcc, result.accuracy);
-
     if (this.stats.logistic.accuracies.length > AUTOSTAT_CONFIG.chartWindow) this.stats.logistic.accuracies.shift();
 
     this.log(`Logistic: [${predictors.join(", ")}] → ${target} | Acc=${fmt(result.accuracy, 4)} | Prec=${fmt(result.precision, 4)}`, "purple");
     this.addResultCard("logistic", predictors.join(", "), target, result);
   }
 
-  /* =========================
-     Auto mode (supports linear OR logistic)
-     ========================= */
-
-  startAutoMode() {
-    const targetSelect = document.getElementById("target-variable");
-    const predictorSelect = document.getElementById("predictor-variables");
-    const groupSizeInput = document.getElementById("predictor-group-size");
-
-    this.targetVariable = targetSelect.value;
-    const selectedPredictors = Array.from(predictorSelect.selectedOptions).map((o) => o.value);
-    const groupSize = parseInt(groupSizeInput?.value || 2);
-
-    if (!this.targetVariable) {
-      alert("Please select a target variable first");
-      return;
-    }
-    if (selectedPredictors.length < groupSize) {
-      alert(`Please select at least ${groupSize} predictor variables`);
-      return;
-    }
-
-    this.combinations = this.generateCombinations(selectedPredictors, groupSize);
-    this.combinationResults = [];
-    this.currentCombinationIndex = 0;
-
-    document.getElementById("combination-progress").classList.remove("hidden");
-    document.getElementById("combination-results").classList.add("hidden");
-    this.updateProgressDisplay();
-
-    this.isRunning = true;
-    this.startTime = Date.now();
-
-    document.getElementById("status-dot").classList.add("status-running");
-    document.getElementById("status-text").textContent = "Auto Mode";
-    document.getElementById("toggle-btn").innerHTML = '<i data-lucide="pause" class="w-4 h-4"></i><span>Stop</span>';
-    lucide.createIcons();
-
-    const interval = parseInt(document.getElementById("interval").value) * 1000;
-    this.runAutoCombination();
-    this.intervalId = setInterval(() => this.runAutoCombination(), interval);
-
-    this.uptimeInterval = setInterval(() => this.updateUptime(), 1000);
-    this.log(`Auto mode started - testing ${this.combinations.length} combinations`, "green");
-  }
-
-  generateCombinations(items, k) {
-    const result = [];
-    const n = items.length;
-
-    function backtrack(start, current) {
-      if (current.length === k) {
-        result.push([...current]);
-        return;
-      }
-      for (let i = start; i < n; i++) {
-        current.push(items[i]);
-        backtrack(i + 1, current);
-        current.pop();
-      }
-    }
-
-    backtrack(0, []);
-    return result;
-  }
-
-  scoreCombinationLinear(data, predictors, target) {
-    const { X, y } = this.buildMatrixAndVector(data, predictors, target);
-    if (X.length < predictors.length + 2) return { score: 0, label: "R²", extra: {} };
-
-    // try multiple regression first
-    if (
-      AUTOSTAT_CONFIG.autoMode.useMultipleLinearRegression &&
-      typeof ss !== "undefined" &&
-      typeof ss.multipleLinearRegression === "function"
-    ) {
-      try {
-        const rows = X.map((row, i) => [...row, y[i]]);
-        const coefs = ss.multipleLinearRegression(rows); // [b0, b1, ...]
-        const preds = X.map((row) => coefs[0] + row.reduce((s, v, j) => s + v * coefs[j + 1], 0));
-        const r2 = this.computeR2(y, preds);
-        return { score: r2, label: "R²", extra: { coefs } };
-      } catch (_) {
-        // fallback below
-      }
-    }
-
-    // fallback: simple regression on composite average (always defined)
-    const X1 = X.map((row) => row.reduce((a, b) => a + b, 0) / row.length);
-    const res = this.linearRegression(X1, y);
-    return { score: res.r2, label: "R²", extra: {} };
-  }
-
-  scoreCombinationLogistic(data, predictors, target) {
-    const { X: Xraw, y: yRaw } = this.buildMatrixAndVector(data, predictors, target);
-    if (Xraw.length < 10) return { score: 0, label: "Accuracy", extra: { precision: 0 } };
-
-    const y = this.binarizeTarget(yRaw);
-    let X = Xraw;
-    if (AUTOSTAT_CONFIG.logistic.standardizeX) X = this.standardizeMatrix(Xraw).X;
-
-    const res = this.logisticRegression(X, y);
-    return { score: res.accuracy, label: "Accuracy", extra: { precision: res.precision } };
-  }
-
-  async runAutoCombination() {
-    if (this.currentCombinationIndex >= this.combinations.length) {
-      this.completeAutoMode();
-      return;
-    }
-
-    const predictors = this.combinations[this.currentCombinationIndex];
-    const sampleSize = parseInt(document.getElementById("sample-size").value);
-    const analysisType = this.getAnalysisType();
-
-    document.getElementById("current-combination").textContent = `Testing: ${predictors.join(" + ")}`;
-
-    const dataInfo = this.getDataForAnalysis(sampleSize);
-    const { data } = dataInfo;
-
-    const scored =
-      analysisType === "logistic"
-        ? this.scoreCombinationLogistic(data, predictors, this.targetVariable)
-        : this.scoreCombinationLinear(data, predictors, this.targetVariable);
-
-    this.combinationResults.push({
-      predictors,
-      target: this.targetVariable,
-      score: scored.score,
-      metricLabel: scored.label,
-      extra: scored.extra,
-      type: analysisType,
-    });
-
-    if (typeof playPing === "function") playPing();
-
-    this.currentCombinationIndex++;
-    this.updateProgressDisplay();
-    this.updateDashboard();
-
-    this.log(
-      `Combination ${this.currentCombinationIndex}/${this.combinations.length}: [${predictors.join(", ")}] → ${scored.label}=${fmt(scored.score, 4)}`,
-      analysisType === "logistic" ? "purple" : "blue"
-    );
-  }
-
-  completeAutoMode() {
-    this.stop();
-
-    // final double-chime (still uses playPing)
-    if (typeof playPing === "function") {
-      setTimeout(playPing, 220);
-      setTimeout(playPing, 520);
-    }
-
-    if (this.combinationResults.length === 0) {
-      this.log("Auto mode complete, but no valid models were scored.", "orange");
-      return;
-    }
-
-    const sorted = [...this.combinationResults].sort((a, b) => b.score - a.score);
-    const best = sorted[0];
-    const worst = sorted[sorted.length - 1];
-
-    document.getElementById("best-model").textContent = `${best.predictors.join(" + ")} → ${best.target}`;
-    document.getElementById("best-model-score").textContent = `${best.metricLabel} = ${fmt(best.score, 4)}`;
-
-    document.getElementById("worst-model").textContent = `${worst.predictors.join(" + ")} → ${worst.target}`;
-    document.getElementById("worst-model-score").textContent = `${worst.metricLabel} = ${fmt(worst.score, 4)}`;
-
-    document.getElementById("combination-results").classList.remove("hidden");
-    document.getElementById("combination-progress").classList.add("hidden");
-
-    this.createComparisonChart(sorted);
-
-    this.log(`Auto mode complete! Best ${best.metricLabel}=${fmt(best.score, 4)}, Worst ${worst.metricLabel}=${fmt(worst.score, 4)}`, "green");
-
-    document.getElementById("status-text").textContent = "Complete";
-    document.getElementById("status-dot").classList.remove("status-running");
-    document.getElementById("toggle-btn").innerHTML = '<i data-lucide="play" class="w-4 h-4"></i><span>Start New Analysis</span>';
-    lucide.createIcons();
-
-    this.isAutoMode = false;
-    this.currentCombinationIndex = 0;
-  }
-
-  createComparisonChart(sortedResults) {
-    if (this.comparisonChart) this.comparisonChart.destroy();
-
-    const metricLabel = sortedResults[0].metricLabel || "Score";
-    const scores = sortedResults.map((r) => r.score);
-    const min = Math.min(...scores);
-    const max = Math.max(...scores);
-
-    const ctx = document.getElementById("comparison-chart").getContext("2d");
-    this.comparisonChart = new Chart(ctx, {
-      type: "bar",
-      data: {
-        labels: sortedResults.map((_, i) => `#${i + 1}`),
-        datasets: [{
-          label: metricLabel,
-          data: scores,
-          backgroundColor: sortedResults.map((_, i) =>
-            i === 0 ? "#10b981" : i === sortedResults.length - 1 ? "#ef4444" : "#6b7280"
-          ),
-          borderWidth: 1,
-        }],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            callbacks: {
-              title: (items) => sortedResults[items[0].dataIndex].predictors.join(" + "),
-              label: (item) => `${metricLabel} = ${Number.isFinite(item.raw) ? item.raw.toFixed(4) : "-"}`,
-            },
-          },
-        },
-        scales: {
-          y: {
-            beginAtZero: metricLabel !== "R²",
-            suggestedMin: metricLabel === "R²" ? Math.min(-1, min) : 0,
-            suggestedMax: metricLabel === "R²" ? Math.max(1, max) : 1,
-            title: { display: true, text: metricLabel },
-          },
-          x: {
-            title: { display: true, text: "Model Rank" },
-          },
-        },
-      },
-    });
-  }
-
-  /* =========================
-     UI: cards + logs + dashboard
-     ========================= */
-
+  /* ---------- UI ---------- */
   addResultCard(type, predictor, target, result) {
     const container = document.getElementById("results-container");
     const card = document.createElement("div");
@@ -944,13 +635,7 @@ class StatisticalAgent {
     const entry = document.createElement("div");
     entry.className = `log-entry p-2 bg-${color}-50 rounded border-l-2 border-${color}-400`;
 
-    const colors = {
-      gray: "text-gray-600",
-      blue: "text-blue-600",
-      purple: "text-purple-600",
-      green: "text-green-600",
-      orange: "text-orange-600",
-    };
+    const colors = { gray: "text-gray-600", blue: "text-blue-600", purple: "text-purple-600", green: "text-green-600", orange: "text-orange-600" };
 
     entry.innerHTML = `
       <span class="text-gray-400 text-xs">[${new Date().toLocaleTimeString()}]</span>
@@ -962,32 +647,24 @@ class StatisticalAgent {
   }
 
   updateDashboard() {
-    // Linear
     document.getElementById("linear-count").textContent = this.stats.linear.count;
     const lastR2 = this.stats.linear.r2Scores[this.stats.linear.r2Scores.length - 1];
     document.getElementById("linear-r2").textContent = fmt(lastR2, 4);
     document.getElementById("linear-best-r2").textContent =
       Number.isFinite(this.stats.linear.bestR2) && this.stats.linear.bestR2 > -Infinity ? this.stats.linear.bestR2.toFixed(4) : "-";
-    const avgSlope = this.stats.linear.slopes.length
-      ? this.stats.linear.slopes.reduce((a, b) => a + b, 0) / this.stats.linear.slopes.length
-      : NaN;
+    const avgSlope = this.stats.linear.slopes.length ? (this.stats.linear.slopes.reduce((a, b) => a + b, 0) / this.stats.linear.slopes.length) : NaN;
     document.getElementById("linear-slope").textContent = fmt(avgSlope, 4);
 
-    // Logistic
     document.getElementById("logistic-count").textContent = this.stats.logistic.count;
     const lastAcc = this.stats.logistic.accuracies[this.stats.logistic.accuracies.length - 1];
     document.getElementById("logistic-acc").textContent = fmt(lastAcc, 4);
     document.getElementById("logistic-best-acc").textContent = fmt(this.stats.logistic.bestAcc, 4);
-    const avgPrec = this.stats.logistic.precisions.length
-      ? this.stats.logistic.precisions.reduce((a, b) => a + b, 0) / this.stats.logistic.precisions.length
-      : NaN;
+    const avgPrec = this.stats.logistic.precisions.length ? (this.stats.logistic.precisions.reduce((a, b) => a + b, 0) / this.stats.logistic.precisions.length) : NaN;
     document.getElementById("logistic-precision").textContent = fmt(avgPrec, 4);
 
-    // System
     document.getElementById("total-runs").textContent = this.stats.totalRuns;
     document.getElementById("data-points").textContent = this.stats.dataPoints.toLocaleString();
 
-    // Charts
     this.linearChart.data.labels = this.stats.linear.r2Scores.map((_, i) => i);
     this.linearChart.data.datasets[0].data = this.stats.linear.r2Scores.map((v) => (Number.isFinite(v) ? v : 0));
     this.linearChart.update("none");
@@ -997,18 +674,16 @@ class StatisticalAgent {
     this.logisticChart.update("none");
   }
 
-  /* =========================
-     Start/Stop
-     ========================= */
-
+  /* ---------- Start/Stop ---------- */
   start() {
     if (this.isRunning) return;
 
     const autoModeCheckbox = document.getElementById("auto-predictor-mode");
     this.isAutoMode = autoModeCheckbox && autoModeCheckbox.checked;
 
+    // auto-mode not modified here (kept off for now)
     if (this.isAutoMode) {
-      this.startAutoMode();
+      this.log("Auto mode is currently disabled in this build. Uncheck Auto-Run to proceed.", "orange");
       return;
     }
 
@@ -1036,21 +711,11 @@ class StatisticalAgent {
     clearInterval(this.uptimeInterval);
 
     document.getElementById("status-dot").classList.remove("status-running");
-
-    if (this.isAutoMode && this.currentCombinationIndex < this.combinations.length) {
-      document.getElementById("status-text").textContent = "Stopped";
-      document.getElementById("combination-progress").classList.add("hidden");
-      this.log("Auto mode stopped by user", "orange");
-      this.isAutoMode = false;
-      this.currentCombinationIndex = 0;
-    } else {
-      document.getElementById("status-text").textContent = "Paused";
-    }
-
+    document.getElementById("status-text").textContent = "Paused";
     document.getElementById("toggle-btn").innerHTML = '<i data-lucide="play" class="w-4 h-4"></i><span>Resume</span>';
     lucide.createIcons();
 
-    if (!this.isAutoMode) this.log("Agent paused", "orange");
+    this.log("Agent paused", "orange");
   }
 
   updateUptime() {
@@ -1060,12 +725,6 @@ class StatisticalAgent {
     const minutes = Math.floor((elapsed % 3600) / 60).toString().padStart(2, "0");
     const seconds = (elapsed % 60).toString().padStart(2, "0");
     document.getElementById("uptime").textContent = `${hours}:${minutes}:${seconds}`;
-  }
-
-  updateProgressDisplay() {
-    const progress = this.combinations.length > 0 ? (this.currentCombinationIndex / this.combinations.length) * 100 : 0;
-    document.getElementById("progress-text").textContent = `${this.currentCombinationIndex} / ${this.combinations.length} completed`;
-    document.getElementById("progress-bar").style.width = `${progress}%`;
   }
 }
 
