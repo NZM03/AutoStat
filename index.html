@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AutoStat AI Agent - Continuous Statistical Analysis</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <meta name="theme-color" content="#764ba2" />
+  <link rel="icon" href="./icons/icon.svg" type="image/svg+xml" />
+
+  <!-- Libraries -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/simple-statistics/7.8.3/simple-statistics.min.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    body { font-family: 'Inter', sans-serif; }
+    .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+    .glass-panel { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); }
+    .pulse-dot { animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    .metric-card { transition: transform 0.2s, box-shadow 0.2s; }
+    .metric-card:hover { transform: translateY(-2px); box-shadow: 0 10px 40px rgba(0,0,0,0.1); }
+    .log-entry { animation: slideIn 0.3s ease-out; }
+    @keyframes slideIn { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: translateX(0); } }
+    .status-running { animation: pulse 1.5s infinite; }
+  </style>
+</head>
+
+<body class="bg-gray-50 min-h-screen">
+
+  <!-- Tailwind safelist for dynamic classes used in JS logs -->
+  <div class="hidden
+    bg-gray-50 bg-blue-50 bg-purple-50 bg-green-50 bg-orange-50
+    border-gray-400 border-blue-400 border-purple-400 border-green-400 border-orange-400
+    text-gray-600 text-blue-600 text-purple-600 text-green-600 text-orange-600
+  "></div>
+
+  <!-- Header -->
+  <header class="gradient-bg text-white shadow-lg">
+    <div class="container mx-auto px-4 py-6">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <i data-lucide="brain-circuit" class="w-10 h-10"></i>
+          <div>
+            <h1 class="text-2xl font-bold">AutoStat AI Agent</h1>
+            <p class="text-purple-200 text-sm">Continuous Statistical Analysis Engine</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-4">
+          <div class="flex items-center gap-2 bg-white/20 px-4 py-2 rounded-full">
+            <div id="status-dot" class="w-3 h-3 bg-green-400 rounded-full"></div>
+            <span id="status-text" class="text-sm font-medium">Idle</span>
+          </div>
+          <button id="toggle-btn" onclick="toggleAgent()" class="bg-white text-purple-600 px-6 py-2 rounded-full font-semibold hover:bg-purple-50 transition-colors flex items-center gap-2">
+            <i data-lucide="play" class="w-4 h-4"></i>
+            <span>Start</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="container mx-auto px-4 py-8">
+
+    <!-- File Upload Section -->
+    <section class="glass-panel rounded-2xl shadow-xl p-6 mb-8">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <i data-lucide="upload" class="w-5 h-5 text-purple-600"></i>
+        Data Source
+      </h2>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+        <!-- Upload Area -->
+        <div>
+          <div id="upload-area" class="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center hover:border-purple-500 transition-colors cursor-pointer bg-gray-50">
+            <i data-lucide="file-spreadsheet" class="w-12 h-12 mx-auto mb-3 text-gray-400"></i>
+            <p class="text-gray-600 font-medium mb-1">Drop Excel file here or click to browse</p>
+            <p class="text-gray-400 text-sm mb-3">Supports .xlsx and .xls files</p>
+            <input type="file" id="excel-file" accept=".xlsx,.xls" class="hidden">
+            <button onclick="document.getElementById('excel-file').click()" class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm">
+              Choose File
+            </button>
+          </div>
+
+          <div id="file-info" class="hidden mt-3 p-3 bg-green-50 border border-green-200 rounded-lg">
+            <div class="flex items-center gap-2 text-green-700">
+              <i data-lucide="check-circle" class="w-5 h-5"></i>
+              <span class="font-medium" id="filename-display">No file selected</span>
+            </div>
+            <p class="text-sm text-green-600 mt-1" id="file-stats"></p>
+          </div>
+        </div>
+
+        <!-- Variable Selection -->
+        <div id="variable-selection" class="hidden">
+          <h3 class="text-sm font-medium text-gray-700 mb-3">Select Variables for Analysis</h3>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-medium text-gray-600 mb-1">Target Variable (Y)</label>
+              <select id="target-variable" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500">
+                <option value="">Select target...</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="block text-xs font-medium text-gray-600 mb-1">Predictor Variables (X)</label>
+              <select id="predictor-variables" multiple class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 h-24"></select>
+              <p class="text-xs text-gray-500 mt-1">Hold Ctrl/Cmd to select multiple</p>
+            </div>
+          </div>
+
+          <!-- Auto Mode Toggle -->
+          <div class="mt-4 p-4 bg-purple-50 rounded-lg border border-purple-200">
+            <div class="flex items-center gap-3">
+              <input type="checkbox" id="auto-predictor-mode" class="w-5 h-5 text-purple-600 rounded focus:ring-purple-500">
+              <div>
+                <label for="auto-predictor-mode" class="font-medium text-purple-900 cursor-pointer">Auto-Run All Predictor Combinations</label>
+                <p class="text-xs text-purple-700">Automatically test all combinations of selected predictors and find the strongest model</p>
+              </div>
+            </div>
+
+            <div id="auto-mode-settings" class="hidden mt-3 pl-8">
+              <label class="block text-xs font-medium text-purple-700 mb-1">Predictors per combination (group size)</label>
+              <input type="number" id="predictor-group-size" value="2" min="1" max="8" class="w-24 px-3 py-2 border border-purple-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500">
+              <p class="text-xs text-purple-600 mt-1">The agent will cycle through all possible combinations of this size</p>
+            </div>
+          </div>
+
+          <!-- Progress Display -->
+          <div id="combination-progress" class="hidden mt-4 p-4 bg-gray-50 rounded-lg">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-sm font-medium text-gray-700">Testing Combinations</span>
+              <span id="progress-text" class="text-sm text-gray-600">0 / 0 completed</span>
+            </div>
+            <div class="w-full bg-gray-200 rounded-full h-3">
+              <div id="progress-bar" class="bg-purple-600 h-3 rounded-full transition-all duration-500" style="width: 0%"></div>
+            </div>
+            <div id="current-combination" class="mt-2 text-xs text-gray-600 font-mono">Waiting to start...</div>
+          </div>
+
+          <!-- Results Summary -->
+          <div id="combination-results" class="hidden mt-4">
+            <div class="p-4 bg-green-50 border border-green-200 rounded-lg">
+              <h4 class="font-semibold text-green-900 mb-3 flex items-center gap-2">
+                <i data-lucide="trophy" class="w-5 h-5"></i>
+                Analysis Complete!
+              </h4>
+
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="p-3 bg-white rounded-lg border border-green-300">
+                  <div class="text-xs text-green-700 font-medium mb-1">🏆 STRONGEST MODEL</div>
+                  <div id="best-model" class="text-sm text-gray-900">-</div>
+                  <div id="best-model-score" class="text-lg font-bold text-green-600">-</div>
+                </div>
+
+                <div class="p-3 bg-white rounded-lg border border-red-300">
+                  <div class="text-xs text-red-700 font-medium mb-1">⚠️ WEAKEST MODEL</div>
+                  <div id="worst-model" class="text-sm text-gray-900">-</div>
+                  <div id="worst-model-score" class="text-lg font-bold text-red-600">-</div>
+                </div>
+              </div>
+
+              <div id="model-comparison-chart" class="mt-4 h-48">
+                <canvas id="comparison-chart"></canvas>
+              </div>
+            </div>
+          </div>
+
+          <div id="data-preview" class="mt-4 hidden">
+            <h4 class="text-xs font-medium text-gray-600 mb-2">Data Preview (First 5 rows)</h4>
+            <div class="overflow-x-auto">
+              <table class="w-full text-xs border border-gray-200 rounded-lg">
+                <thead id="preview-header" class="bg-gray-100"></thead>
+                <tbody id="preview-body"></tbody>
+              </table>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <!-- Control Panel -->
+    <section class="glass-panel rounded-2xl shadow-xl p-6 mb-8">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <i data-lucide="settings-2" class="w-5 h-5 text-purple-600"></i>
+        Analysis Configuration
+      </h2>
+
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-2">Analysis Interval (seconds)</label>
+          <input type="number" id="interval" value="5" min="1" max="300"
+                 class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent">
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-2">Sample Size per Run</label>
+          <input type="number" id="sample-size" value="100" min="20" max="5000"
+                 class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent">
+          <p class="text-xs text-gray-500 mt-1">From uploaded data or generated</p>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-2">Data Source Mode</label>
+          <select id="data-mode"
+                  class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent">
+            <option value="uploaded">Use Uploaded Data</option>
+            <option value="generated">Generate Synthetic Data</option>
+            <option value="mixed">Mixed (Alternate)</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-2">Analysis Type</label>
+          <select id="analysis-type"
+                  class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent">
+            <option value="both">Both Linear & Logistic</option>
+            <option value="linear">Linear Regression Only</option>
+            <option value="logistic">Logistic Regression Only</option>
+          </select>
+        </div>
+      </div>
+    </section>
+
+    <!-- Metrics Dashboard -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+
+      <!-- Linear Regression Card -->
+      <div class="metric-card bg-white rounded-2xl shadow-lg p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="font-semibold text-gray-800 flex items-center gap-2">
+            <i data-lucide="trending-up" class="w-5 h-5 text-blue-500"></i>
+            Linear Regression
+          </h3>
+          <span id="linear-count" class="text-2xl font-bold text-blue-600">0</span>
+        </div>
+
+        <div class="space-y-3">
+          <div class="flex justify-between text-sm">
+            <span class="text-gray-600">Last R² Score</span>
+            <span id="linear-r2" class="font-mono font-semibold">-</span>
+          </div>
+          <div class="flex justify-between text-sm">
+            <span class="text-gray-600">Best R² Score</span>
+            <span id="linear-best-r2" class="font-mono font-semibold text-green-600">-</span>
+          </div>
+          <div class="flex justify-between text-sm">
+            <span class="text-gray-600">Avg Slope</span>
+            <span id="linear-slope" class="font-mono font-semibold">-</span>
+          </div>
+        </div>
+
+        <div class="mt-4 h-32">
+          <canvas id="linear-chart"></canvas>
+        </div>
+      </div>
+
+      <!-- Logistic Regression Card -->
+      <div class="metric-card bg-white rounded-2xl shadow-lg p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="font-semibold text-gray-800 flex items-center gap-2">
+            <i data-lucide="binary" class="w-5 h-5 text-purple-500"></i>
+            Logistic Regression
+          </h3>
+          <span id="logistic-count" class="text-2xl font-bold text-purple-600">0</span>
+        </div>
+
+        <div class="space-y-3">
+          <div class="flex justify-between text-sm">
+            <span class="text-gray-600">Last Accuracy</span>
+            <span id="logistic-acc" class="font-mono font-semibold">-</span>
+          </div>
+          <div class="flex justify-between text-sm">
+            <span class="text-gray-600">Best Accuracy</span>
+            <span id="logistic-best-acc" class="font-mono font-semibold text-green-600">-</span>
+          </div>
+          <div class="flex justify-between text-sm">
+            <span class="text-gray-600">Avg Precision</span>
+            <span id="logistic-precision" class="font-mono font-semibold">-</span>
+          </div>
+        </div>
+
+        <div class="mt-4 h-32">
+          <canvas id="logistic-chart"></canvas>
+        </div>
+      </div>
+
+      <!-- System Stats -->
+      <div class="metric-card bg-white rounded-2xl shadow-lg p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="font-semibold text-gray-800 flex items-center gap-2">
+            <i data-lucide="activity" class="w-5 h-5 text-green-500"></i>
+            System Status
+          </h3>
+          <span id="total-runs" class="text-2xl font-bold text-green-600">0</span>
+        </div>
+
+        <div class="space-y-3">
+          <div class="flex justify-between text-sm">
+            <span class="text-gray-600">Uptime</span>
+            <span id="uptime" class="font-mono font-semibold">00:00:00</span>
+          </div>
+          <div class="flex justify-between text-sm">
+            <span class="text-gray-600">Data Points Processed</span>
+            <span id="data-points" class="font-mono font-semibold">0</span>
+          </div>
+          <div class="flex justify-between text-sm">
+            <span class="text-gray-600">Variables Analyzed</span>
+            <span id="variables-analyzed" class="font-mono font-semibold">0</span>
+          </div>
+        </div>
+
+        <div class="mt-4 p-3 bg-gray-50 rounded-lg">
+          <div class="flex items-center gap-2 text-sm text-gray-600">
+            <i data-lucide="cpu" class="w-4 h-4"></i>
+            <span>Processing: <span id="current-var" class="font-mono">-</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Live Results & Logs -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <!-- Current Analysis Results -->
+      <div class="bg-white rounded-2xl shadow-lg p-6">
+        <h3 class="font-semibold text-gray-800 mb-4 flex items-center gap-2">
+          <i data-lucide="file-bar-chart" class="w-5 h-5 text-indigo-500"></i>
+          Latest Analysis Results
+        </h3>
+        <div id="results-container" class="space-y-4 max-h-96 overflow-y-auto">
+          <div class="text-center text-gray-400 py-8">
+            <i data-lucide="bar-chart-2" class="w-12 h-12 mx-auto mb-2 opacity-50"></i>
+            <p>No analyses completed yet. Start the agent to begin.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Activity Log -->
+      <div class="bg-white rounded-2xl shadow-lg p-6">
+        <h3 class="font-semibold text-gray-800 mb-4 flex items-center gap-2">
+          <i data-lucide="scroll-text" class="w-5 h-5 text-orange-500"></i>
+          Activity Log
+        </h3>
+        <div id="log-container" class="space-y-2 max-h-96 overflow-y-auto font-mono text-sm">
+          <div class="log-entry p-2 bg-gray-50 rounded text-gray-600">
+            <span class="text-gray-400">[System]</span> Agent initialized and ready
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- App logic -->
+  <script src="./script.js"></script>
+
+  <script>
+    lucide.createIcons();
+  </script>
+
+  <!-- Audio Context for ping sound -->
+  <script>
+    window.audioContext = null;
+
+    function initAudio() {
+      if (!window.audioContext) {
+        window.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      }
+    }
+
+    function playPing() {
+      initAudio();
+      if (!window.audioContext) return;
+
+      const osc = window.audioContext.createOscillator();
+      const gain = window.audioContext.createGain();
+
+      osc.connect(gain);
+      gain.connect(window.audioContext.destination);
+
+      osc.frequency.setValueAtTime(800, window.audioContext.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(400, window.audioContext.currentTime + 0.3);
+
+      gain.gain.setValueAtTime(0.1, window.audioContext.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, window.audioContext.currentTime + 0.3);
+
+      osc.start(window.audioContext.currentTime);
+      osc.stop(window.audioContext.currentTime + 0.3);
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+      const autoModeCheckbox = document.getElementById('auto-predictor-mode');
+      const autoModeSettings = document.getElementById('auto-mode-settings');
+
+      if (autoModeCheckbox && autoModeSettings) {
+        autoModeCheckbox.addEventListener('change', function() {
+          autoModeSettings.classList.toggle('hidden', !this.checked);
+        });
+      }
+    });
+  </script>
+
+  <!-- Service worker register (GitHub Pages compatible) -->
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("./service-worker.js");
+      });
+    }
+  </script>
+
+</body>
+</html>
