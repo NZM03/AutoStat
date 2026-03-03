@@ -1,10 +1,11 @@
-const CACHE_NAME = "autostat-cache-v2"; // bump version when you change files
+const CACHE_NAME = "autostat-cache-v3";
 const ASSETS = [
   "./",
   "./index.html",
   "./script.js",
   "./manifest.webmanifest",
   "./icons/icon.svg",
+  "./sounds/bmw-warning-chime.mp3",
 ];
 
 self.addEventListener("install", (event) => {
@@ -23,9 +24,6 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) return cached;
-      return fetch(event.request);
-    })
+    caches.match(event.request).then((cached) => cached || fetch(event.request))
   );
 });
