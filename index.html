@@ -335,7 +335,30 @@
       <div class="bg-white rounded-2xl shadow-lg p-6">
         <h3 class="font-semibold text-gray-800 mb-4 flex items-center gap-2">
           <i data-lucide="file-bar-chart" class="w-5 h-5 text-indigo-500"></i>
-          <!-- Live Math / Calculations -->
+          Latest Analysis Results
+        </h3>
+        <div id="results-container" class="space-y-4 max-h-96 overflow-y-auto">
+          <div class="text-center text-gray-400 py-8">
+            <i data-lucide="bar-chart-2" class="w-12 h-12 mx-auto mb-2 opacity-50"></i>
+            <p>No analyses completed yet. Start the agent to begin.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-2xl shadow-lg p-6">
+        <h3 class="font-semibold text-gray-800 mb-4 flex items-center gap-2">
+          <i data-lucide="scroll-text" class="w-5 h-5 text-orange-500"></i>
+          Activity Log
+        </h3>
+        <div id="log-container" class="space-y-2 max-h-96 overflow-y-auto font-mono text-sm">
+          <div class="log-entry p-2 bg-gray-50 rounded text-gray-600">
+            <span class="text-gray-400">[System]</span> Agent initialized and ready
+          </div>
+        </div>
+      </div>
+    </div>
+
+  <!-- Live Math / Calculations -->
 <section class="mt-8 glass-panel rounded-2xl shadow-xl p-6">
   <div class="flex items-center justify-between gap-4">
     <h2 class="text-xl font-semibold flex items-center gap-2">
@@ -369,7 +392,6 @@
 </section>
 
 <script>
-  // Toggle live math visibility (does not affect calculations)
   document.addEventListener("DOMContentLoaded", () => {
     const btn = document.getElementById("toggle-math");
     const panel = document.getElementById("math-panel");
@@ -380,30 +402,8 @@
     });
   });
 </script>
-          Latest Analysis Results
-        </h3>
-        <div id="results-container" class="space-y-4 max-h-96 overflow-y-auto">
-          <div class="text-center text-gray-400 py-8">
-            <i data-lucide="bar-chart-2" class="w-12 h-12 mx-auto mb-2 opacity-50"></i>
-            <p>No analyses completed yet. Start the agent to begin.</p>
-          </div>
-        </div>
-      </div>
 
-      <div class="bg-white rounded-2xl shadow-lg p-6">
-        <h3 class="font-semibold text-gray-800 mb-4 flex items-center gap-2">
-          <i data-lucide="scroll-text" class="w-5 h-5 text-orange-500"></i>
-          Activity Log
-        </h3>
-        <div id="log-container" class="space-y-2 max-h-96 overflow-y-auto font-mono text-sm">
-          <div class="log-entry p-2 bg-gray-50 rounded text-gray-600">
-            <span class="text-gray-400">[System]</span> Agent initialized and ready
-          </div>
-        </div>
-      </div>
-    </div>
-
-  </main>
+</main>
 
   <!-- Your chime file (put in repo: sounds/bmw-warning-chime.mp3) -->
   <audio id="bmw-chime" src="./sounds/bmw-warning-chime.mp3" preload="auto"></audio>
